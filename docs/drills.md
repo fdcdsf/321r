@@ -1,0 +1,131 @@
+# Дриллы фазы 2 (и ежеквартальные)
+
+## Синтетический дрилл смены IP
+
+Реальную смену IP у провайдера **не проводим — платная услуга** (решение 2026-11-08, PLAN v11).
+Дрилл имитирует всю цепочку реального события: DNS ещё указывает на «старый» адрес → ddns сам
+замечает и правит записи → соседи через reresolve переподключают пира → handshake возвращается.
+
+«Старый» адрес = **203.0.113.10** (TEST-NET-3, зарезервирован для документации — пакеты в него
+уходят в никуда, вреда нет). Если Cloudflare откажет на такой адрес — взять другой TEST-NET
+(192.0.2.10 / 198.51.100.10).
+
+### Шаг 0 — на всех трёх нодах: cron действительно запускает ddns (мгновенно)
+
+```bash
+journalctl -u cron --since "15 min ago" | grep ddns | tail -3
+```
+
+Критерий: строки `(root) CMD (/usr/local/bin/ddns.sh ...)` — по одной на каждые 2 минуты.
+
+### Шаг 1 — нода a: «регистратор» (вкладку a не закрывать)
+
+```bash
+pe=""; pd="-"
+for i in $(seq 1 14); do
+  d=$(getent hosts b.321r.ru | awk '{print $1}')
+  e=$(awg show wg0 | grep -A2 'peer: vHCI/H57d6v7JsIjD+iXEGdzgJEv7kkFImKasqOMHm0=' | awk '/endpoint/{print $2}')
+  p=$(ping -c1 -W1 10.66.0.2 | grep -o 'time=[0-9.]*' || echo time=FAIL)
+  if [ "$d" != "$pd" ] || [ "$e" != "$pe" ]; then
+    printf '%s dig=%s endpoint=%s %s\n' "$(date +%T)" "${d:-нет}" "${e:-нет}" "$p"
+    pd=$d; pe=$e
+  fi
+  sleep 15
+done
+echo "наблюдение завершено"
+```
+
+Печатает только моменты изменений (~3.5 мин, терминал занят — нормально). Endpoint обновляет
+штатный таймер reresolve (45 с), а keepalive от b возвращает пира рокировкой (25 с) — из-за этого
+endpoint и dig могут на мгновение расходиться; важно к финалу.
+
+### Шаг 2 — нода b: имитация «IP сменился» (одна вставка, сама ждёт и снимает лог)
+
+```bash
+. /etc/ddns.env
+API="https://api.cloudflare.com/client/v4"
+AUTH="Authorization: Bearer $CF_TOKEN"
+FAKE=203.0.113.10
+ZID=$(curl -fsS -H "$AUTH" "$API/zones?name=$CF_ZONE_NAME" | jq -r '.result[0].id')
+CUR=$(cat /var/lib/ddns/last_ip 2>/dev/null || true)
+[ -n "$CUR" ] || CUR=$(curl -4 -fsS https://api.ipify.org)
+IDA=$(curl -fsS -H "$AUTH" "$API/zones/$ZID/dns_records?type=A&name=${NODE_NAME}.${CF_ZONE_NAME}" | jq -r '.result[0].id // empty')
+IDH=$(curl -fsS -H "$AUTH" "$API/zones/$ZID/dns_records?type=A&name=${HUB_NAME}.${CF_ZONE_NAME}" | jq -r --arg ip "$CUR" '.result[] | select(.content==$ip) | .id' | head -n1)
+echo "CUR=$CUR IDA=$IDA IDH=$IDH"
+OK=1
+if [ -n "$IDA" ] && [ -n "$IDH" ]; then
+  for id in "$IDA" "$IDH"; do
+    if curl -fsS -H "$AUTH" -H "Content-Type: application/json" -X PATCH \
+         -d "{\"type\":\"A\",\"content\":\"$FAKE\",\"ttl\":1,\"proxied\":false}" \
+         "$API/zones/$ZID/dns_records/$id" | jq -e '.success' >/dev/null; then
+      echo "запись $id -> $FAKE ok"
+    else
+      echo "ОШИБКА патча $id"; OK=0
+    fi
+  done
+  if [ "$OK" = 1 ]; then
+    echo "$FAKE" > /var/lib/ddns/last_ip
+    echo "ДРИЛЛ armed: записи и состояние -> $FAKE, жду cron (<=2 мин)..."
+    sleep 150
+    echo "--- лог ddns:"
+    tail -3 /var/log/ddns.log
+  else
+    echo "состояние НЕ менял — приши вывод"
+  fi
+else
+  echo "ОШИБКА: не нашёл записи (IDA='$IDA' IDH='$IDH') — ничего не менялось"
+fi
+```
+
+Порядок важен: сначала записи, потом состояние (cron между этими шагами молчит — состояние
+ещё настоящее). Токен берётся из `/etc/ddns.env` на сервере и никуда не выводится.
+
+Критерий: в логе свежая строка
+`... b.321r.ru и dns.321r.ru -> 48.102.162.135` — её написал сам cron, ddns руками не запускали.
+
+### Шаг 3 — нода a: финальная проверка (после «наблюдение завершено»)
+
+```bash
+sleep 60
+getent hosts b.321r.ru
+awg show wg0 | grep -A2 'peer: vHCI/H57d6v7JsIjD+iXEGdzgJEv7kkFImKasqOMHm0='
+ping -c 3 10.66.0.2
+```
+
+Критерий: `48.102.162.135 b.321r.ru`; endpoint `48.102.162.135:51821`; handshake свежий;
+пинг 0% потерь. Если getent ещё показывает 203.0.113.10 — кэш DNS, подождать минуту и повторить.
+
+### Откат (если что-то пошло не так)
+
+На ноде b, одной строкой — чинит обе записи в любом случае:
+
+```bash
+echo 203.0.113.10 > /var/lib/ddns/last_ip; /usr/local/bin/ddns.sh; echo 48.102.162.135 > /var/lib/ddns/last_ip
+```
+
+Если в шаге 2 была ОШИБКА — пришлить вывод, команда восстановления даётся отдельно.
+
+### Что засчитывает
+
+- Дрилл «смены IP» (PLAN, фаза 2) — цепочка ddns → DNS → reresolve → handshake без участия
+  провайдера.
+- Дрилл «ручная подмена A-записи» — регистратор на шаге 1 ловит переключение endpoint.
+- Наблюдение за линком РФ↔зарубеж — параллельно, 1–2 дня.
+
+### Результат (2026-11-08): оба дрилла пройдены
+
+- b: cron сам починил обе записи на первом тике (лог 18:06:03), руками ddns не запускали.
+- a: след fake→real — endpoint и пинг падали в окне ≤2 мин и восстановились; финал: настоящий IP,
+  handshake свежий, 0% потерь; hub dns.321r.ru снова 3 адреса; cron подтверждён на всех трёх.
+- 2026-11-09 (2-й день наблюдения): handshakes свежие на всех трёх нодах (3 с — 2 мин 32 с),
+  пинг без потерь — линк РФ↔зарубеж стабилен, наблюдение закрыто.
+
+### Ответы на вопросы по дриллу
+
+- **Повторять дрилл нужно только с ОДНОЙ ноды** (b — «жертва», a — «регистратор»): скрипты
+  и юниты на всех нодах идентичны (проверено выгрузкой с a, файлы лежат в git: scripts/,
+  systemd/, cron.d/ddns). Персонального в них ничего нет — конфиги и env нод читаются на месте.
+- **Принудительный `systemctl start reresolve-dns.service`** в петле не нужен: юнит — обычный
+  oneshot (без RemainAfterExit), но его запуск всё равно может наткнуться на кэш NSS (`getent`),
+  в то время как `dig` идёт мимо кэша — отсюда мгновенное расхождение «dig=настоящий,
+  endpoint=старый». Решает всё штатный таймер 45 с.

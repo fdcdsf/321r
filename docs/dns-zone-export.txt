@@ -1,0 +1,25 @@
+;;
+;; Domain:     321r.ru.
+;; Exported:   2026-11-08 13:29:18
+;; Source:     Cloudflare zone export (архив для миграции зоны к регистратору)
+;;
+;; SOA Record
+321r.ru	3600	IN	SOA	kami.ns.cloudflare.com. dns.cloudflare.com. 2054581115 10000 2400 604800 3600
+
+;; NS Records
+321r.ru.	86400	IN	NS	kami.ns.cloudflare.com.
+321r.ru.	86400	IN	NS	keaton.ns.cloudflare.com.
+
+;; A Records
+a.321r.ru.	1	IN	A	178.236.242.213 ; cf_tags=cf-proxied:false
+b.321r.ru.	1	IN	A	48.102.162.135 ; cf_tags=cf-proxied:false
+c.321r.ru.	1	IN	A	194.48.141.214 ; cf_tags=cf-proxied:false
+dns.321r.ru.	1	IN	A	194.48.141.214 ; cf_tags=cf-proxied:false
+dns.321r.ru.	1	IN	A	48.102.162.135 ; cf_tags=cf-proxied:false
+dns.321r.ru.	1	IN	A	178.236.242.213 ; cf_tags=cf-proxied:false
+
+;; CNAME Records
+app.321r.ru.	1	IN	CNAME	dns.321r.ru. ; cf_tags=cf-proxied:false
+komodo.321r.ru.	1	IN	CNAME	dns.321r.ru. ; cf_tags=cf-proxied:false
+pangolin.321r.ru.	1	IN	CNAME	dns.321r.ru. ; cf_tags=cf-proxied:false
+rem.321r.ru.	1	IN	CNAME	dns.321r.ru. ; cf_tags=cf-proxied:false
