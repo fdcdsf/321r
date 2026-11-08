@@ -335,8 +335,8 @@ vps/
       2222 `open/syn-ack`; 80/443/8443/2053 `closed/reset` (ufw пропускает, служб ещё нет);
       22 и mesh-порты `filtered/no-response`; UDP: 53/51820/21820 `closed/port-unreach`
       (rate-limit пропускает), 51821 `open|filtered` (WG молчит), 4789/7946 `open|filtered` (дроп).
-- [ ] IPv6-зеркало: a→c совпал (2026-11-09); **c→a пересканировать** — в первой попытке
-      нода c просканировала саму себя (в команде остался адрес c; loopback минует ufw).
+- [x] IPv6-зеркало: a→c и c→a совпали (2026-11-09): 2222 `open`, 80/443/8443/2053 `closed`,
+      22 `filtered`; UDP 53/51820/21820 `port-unreach`, 51821 `open|filtered`.
 - [ ] `DOCKER-USER` (ingress-порты мимо ufw) — по плану ставится в **фазе 6**.
 
 ### Фаза 4 — Postgres для Pangolin (2–3 часа)
