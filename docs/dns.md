@@ -40,7 +40,7 @@ Cloudflare НЕ включать нигде (заблокированы в РФ)
 |---|---|---|---|
 | `pangolin` | CNAME | `dns.321r.ru` | дашборд Pangolin :8443 ✓ |
 | `app` | CNAME | `dns.321r.ru` | тестовый ресурс Pangolin (фаза 5) ✓ |
-| `komodo` | CNAME | `dns.321r.ru` | панель Komodo (фаза 6) ✓ |
+| `komodo` | CNAME | `dns.321r.ru` | панель Komodo (фаза 6б) ✓ |
 | `rem` | CNAME | `dns.321r.ru` | панель Remnawave, VPN-подписки (фаза 9) ✓ |
 
 ## Позже (фаза 7)
@@ -77,7 +77,7 @@ nslookup pangolin.321r.ru # три IP (развёрнутый CNAME), поряд
 - Панель Cloudflare → My Profile → API Tokens → Create Token → шаблон **Edit zone DNS**
   → зона `321r.ru` (права: Zone.DNS Edit + Zone.Zone Read).
 - **Zone ID**: `d6bf4101ff617357fc402709b53572b7` — **Account ID**: `72ae1ed0c87874a62118d0ea3d623e0c`
-  (Account ID понадобится в фазе 3 для R2/S3-эндпоинта).
+  (для R2 не нужен — R2 отменён; сохранён на случай S3-совместимых сервисов).
 - Токен проверен API-вызовами: чтение зоны ✓, запись DNS ✓. Токен в git-репозиторий
   **не записывается** — в команды подставляется плейсхолдером на месте.
 - Токен хранится в SOPS (см. `.sops.yaml`) и раскладывается **на все три VPS**
