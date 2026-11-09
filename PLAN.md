@@ -49,6 +49,7 @@
 | Надёжность | наиболее надёжный | неизвестная | были потери данных |
 | Mesh-адрес | 10.66.0.1 | 10.66.0.2 | 10.66.0.3 |
 | Публичный IP (текущий, DDNS) | 178.236.242.213 | 48.102.162.135 | 194.48.141.214 |
+| Hostname (Swarm-нода) | a = `naval-chocolate.ptr.network` | b = `absent-coral.play2go.cloud` (Leader) | c = `debian` |
 | Pangolin-стек | ✓ домашний фасад | ✓ **ACME-клиент** | ✓ |
 | Postgres (Pangolin) | **реплика** (читает локально во время блокировок) | **primary** | — |
 | Valkey | — (оптимизация: реплика — потом) | ✓ | — |
@@ -345,7 +346,8 @@ vps/
       (rate-limit пропускает), 51821 `open|filtered` (WG молчит), 4789/7946 `open|filtered` (дроп).
 - [x] IPv6-зеркало: a→c и c→a совпали (2026-11-09): 2222 `open`, 80/443/8443/2053 `closed`,
       22 `filtered`; UDP 53/51820/21820 `port-unreach`, 51821 `open|filtered`.
-- [ ] `DOCKER-USER` (ingress-порты мимо ufw) — по плану ставится в **фазе 6а**.
+- [x] `DOCKER-USER` (ingress-порты мимо ufw) — закрыто в **фазе 6а** (2026-11-09,
+      `systemd/docker-user.service` enabled на всех трёх, DROP-правило последнее в цепочке).
 
 ### Фаза 6а — Docker Swarm: инфраструктура (1–1,5 часа)
 
@@ -365,11 +367,16 @@ vps/
    `systemd/docker-user.service` (git-источник, на ноды — копипастом).
 
 Проверки:
-- [ ] `docker node ls` — 3× Ready, MANAGER: Leader + 2× Reachable.
-- [ ] Метки: `docker node inspect` → role=state/work/bulk на своих нодах.
-- [ ] `ufw status` содержит `10.66.0.0/24`; nmap 2377/7946/4789 с соседней ноды → `filtered`.
-- [ ] `iptables -L DOCKER-USER` — правила на месте; тест-контейнеры: из mesh — 200,
-      из мира на непубличный порт — таймаут (DROP).
+- [x] `docker node ls` — 3× Ready, MANAGER: Leader + 2× Reachable (2026-11-09):
+      b `absent-coral.play2go.cloud` Leader; a `naval-chocolate.ptr.network`, c `debian` —
+      Reachable; engine 29.9.3.
+- [x] Метки (2026-11-09): a → `role=state` (addr 10.66.0.1), b → `role=work` (10.66.0.2),
+      c → `role=bulk` (10.66.0.3).
+- [x] `ufw status` содержит `10.66.0.0/24` (mesh-правило на месте); nmap с соседней ноды
+      2377/7946/4789 → все `filtered` (2026-11-09).
+- [x] `iptables -L DOCKER-USER` — enabled, 10 правил, последнее DROP (2026-11-09, все 3);
+      тест-контейнеры: из mesh (10.66.0.2:18081) — 200/exit=0, из мира на непубличный
+      18080 — таймаут exit=28 (DROP, без правила был бы exit=7). Тест-контейнеры удалены.
 
 ### Фаза 4 — Общий слой БД: Postgres + MongoDB + Valkey (3–4 часа)
 

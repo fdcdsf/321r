@@ -18,8 +18,8 @@ Remnawave (VPN для обхода цензуры), Komodo (панель упр�
 | 1 | Каркас репозитория | ⏳ почти готово (push есть; осталось: age-ключ в менеджер + печать) |
 | 2 | DDNS + меш (AmneziaWG) | ✅ готово (2026-11-09: дриллы + 2 дня наблюдения) |
 | 3 | Firewall | ✅ готово (2026-11-09: SSH 2222+ключи, ufw по §3, rate-limit 53, fail2ban, nmap-сверка, IPv6-зеркало) |
-| 6а | Swarm: инфраструктура + DOCKER-USER | ⬜ **следующая** |
-| 4 | Общий слой БД: Postgres + MongoDB + Valkey | ⬜ |
+| 6а | Swarm: инфраструктура + DOCKER-USER | ✅ готово (2026-11-09: swarm 3× Ready, метки ролей, ufw-mesh, DOCKER-USER + тесты DROP) |
+| 4 | Общий слой БД: Postgres + MongoDB + Valkey | ⬜ **следующая** |
 | 6б | Komodo и стеки | ⬜ |
 | 5 | Pangolin-кластер | ⬜ |
 | 7 | Свои БД + Patroni | ⬜ |
