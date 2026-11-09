@@ -201,7 +201,9 @@ deploy_proxy() { # $1 = alias узла
   fi
   run_on "$1" "sed -i '/# BEGIN ${APP}/,/# END ${APP}/d' /opt/db/proxy/haproxy.cfg"
   scp "${SCPOPTS[@]}" "$GEN/block.cfg" "root@${nip}:/opt/db/proxy/block.cfg"
-  run_on "$1" "cat /opt/db/proxy/block.cfg >> /opt/db/proxy/haproxy.cfg && rm -f /opt/db/proxy/block.cfg"
+  # конфиг должен быть читаем ИЗ контейнера: haproxy в образе идёт не от root,
+  # а файлы от нас уходят с umask 077 (0600) — чиним права после дозаписи блока
+  run_on "$1" "cat /opt/db/proxy/block.cfg >> /opt/db/proxy/haproxy.cfg && chmod 644 /opt/db/proxy/haproxy.cfg && rm -f /opt/db/proxy/block.cfg"
   scp "${SCPOPTS[@]}" "$GEN/proxy-compose.yml" "root@${nip}:/opt/db/proxy/docker-compose.yml"
   run_on "$1" "cd /opt/db/proxy && docker compose up -d; docker kill -s USR1 db-proxy 2>/dev/null || true"
 }
