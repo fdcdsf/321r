@@ -42,7 +42,8 @@ case "$ENGINE" in pg|mongo) ;; *) echo "неизвестный engine: $ENGINE" 
 # ---------- nodes.map ----------
 map_ip()    { awk -v a="$1" '$1==a{print $2}' /etc/db/nodes.map; }
 map_swarm() { awk -v a="$1" '$1==a{print $3}' /etc/db/nodes.map; }
-read -r -a ALL_NODES < <(awk '{print $1}' /etc/db/nodes.map)
+# mapfile, а НЕ read -a: read читает одну строку и получался только первый узел
+mapfile -t ALL_NODES < <(awk '{print $1}' /etc/db/nodes.map)
 ME_ALIAS="$(awk -v s="$(hostname)" '$3==s{print $1}' /etc/db/nodes.map)"
 
 for n in "${NODES[@]}" "$PRIMARY" ${ARB:+"$ARB"}; do
