@@ -97,7 +97,8 @@ q "SELECT 1 FROM pg_roles WHERE rolname='@APP@'" | grep -q '^1$' || \
   q "CREATE ROLE @APP@ WITH LOGIN PASSWORD '${APP_PASSWORD}'"
 q "SELECT 1 FROM pg_database WHERE datname='@APP@'" | grep -q '^1$' || \
   q "CREATE DATABASE @APP@ OWNER @APP@"
-HBA=/var/lib/postgresql/data/pg_hba.conf
+# скрипт бежит на хосте: hba-файл лежит в хост-каталоге тома (там смонтирован PGDATA)
+HBA=/var/lib/dbdata/pg-@APP@/pg_hba.conf
 grep -q '10.66.0.0/24' "$HBA" || cat >> "$HBA" <<'HBA'
 host    all             all             10.66.0.0/24            scram-sha-256
 host    replication     replicator      10.66.0.0/24            scram-sha-256
