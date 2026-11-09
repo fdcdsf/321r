@@ -16,6 +16,8 @@ umask 077
 APP="${1:?usage: db-add.sh <app>}"
 REG="/etc/db/apps.d/${APP}.yaml"
 SSHOPTS=(-p 2222 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5)
+# у scp порт — заглавный -P (у ssh -p): отдельный массив, иначе scp примет 2222 за файл
+SCPOPTS=(-P 2222 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=5)
 GEN="$(mktemp -d)"; trap 'rm -rf "$GEN"' EXIT
 
 [ -f "$REG" ] || { echo "нет реестра $REG" >&2; exit 1; }
@@ -53,7 +55,7 @@ run_on() { ssh "${SSHOPTS[@]}" "root@$(map_ip "$1")" "$2"; }
 for n in "${ALL_NODES[@]}"; do
   ip="$(map_ip "$n")"; [ -n "$ip" ] || continue
   ssh "${SSHOPTS[@]}" "root@$ip" 'mkdir -p /etc/db/apps.d /etc/db/secrets /opt/db'
-  scp "${SSHOPTS[@]}" "$REG" "root@$ip:/etc/db/apps.d/"
+  scp "${SCPOPTS[@]}" "$REG" "root@$ip:/etc/db/apps.d/"
 done
 
 # ---------- генераторы файлов (пишутся локально, раздаются scp) ----------
@@ -194,12 +196,12 @@ deploy_proxy() { # $1 = alias узла
   local nip; nip="$(map_ip "$1")"
   ssh "${SSHOPTS[@]}" "root@$nip" 'mkdir -p /opt/db/proxy'
   if ! run_on "$1" 'test -f /opt/db/proxy/haproxy.cfg'; then
-    scp "${SSHOPTS[@]}" "$GEN/base.cfg" "root@${nip}:/opt/db/proxy/haproxy.cfg"
+    scp "${SCPOPTS[@]}" "$GEN/base.cfg" "root@${nip}:/opt/db/proxy/haproxy.cfg"
   fi
   run_on "$1" "sed -i '/# BEGIN ${APP}/,/# END ${APP}/d' /opt/db/proxy/haproxy.cfg"
-  scp "${SSHOPTS[@]}" "$GEN/block.cfg" "root@${nip}:/opt/db/proxy/block.cfg"
+  scp "${SCPOPTS[@]}" "$GEN/block.cfg" "root@${nip}:/opt/db/proxy/block.cfg"
   run_on "$1" "cat /opt/db/proxy/block.cfg >> /opt/db/proxy/haproxy.cfg && rm -f /opt/db/proxy/block.cfg"
-  scp "${SSHOPTS[@]}" "$GEN/proxy-compose.yml" "root@${nip}:/opt/db/proxy/docker-compose.yml"
+  scp "${SCPOPTS[@]}" "$GEN/proxy-compose.yml" "root@${nip}:/opt/db/proxy/docker-compose.yml"
   run_on "$1" "cd /opt/db/proxy && docker compose up -d; docker kill -s USR1 db-proxy 2>/dev/null || true"
 }
 
@@ -233,19 +235,19 @@ if [ "$ENGINE" = pg ]; then
   if [ "$PRIMARY" = "$ME_ALIAS" ]; then
     SEC="/etc/db/secrets/${APP}.env"
   else
-    scp "${SSHOPTS[@]}" "root@${PRIMARY_IP}:/etc/db/secrets/${APP}.env" "$GEN/env"
+    scp "${SCPOPTS[@]}" "root@${PRIMARY_IP}:/etc/db/secrets/${APP}.env" "$GEN/env"
     SEC="$GEN/env"
   fi
   for n in "${NODES[@]}"; do
     [ "$n" = "$PRIMARY" ] && continue
-    scp "${SSHOPTS[@]}" "$SEC" "root@$(map_ip "$n"):/etc/db/secrets/${APP}.env"
+    scp "${SCPOPTS[@]}" "$SEC" "root@$(map_ip "$n"):/etc/db/secrets/${APP}.env"
   done
 
   # первичный: compose + роли/база/pg_hba
   gen_pg_compose "$PRIMARY" > "$GEN/docker-compose.yml"
   gen_init_app
-  scp "${SSHOPTS[@]}" "$GEN/docker-compose.yml" "root@${PRIMARY_IP}:/opt/db/pg-${APP}/docker-compose.yml"
-  scp "${SSHOPTS[@]}" "$GEN/init-app.sh" "root@${PRIMARY_IP}:/opt/db/init-${APP}.sh"
+  scp "${SCPOPTS[@]}" "$GEN/docker-compose.yml" "root@${PRIMARY_IP}:/opt/db/pg-${APP}/docker-compose.yml"
+  scp "${SCPOPTS[@]}" "$GEN/init-app.sh" "root@${PRIMARY_IP}:/opt/db/init-${APP}.sh"
   run_on "$PRIMARY" "cd /opt/db/pg-${APP} && docker compose up -d"
   run_on "$PRIMARY" "chmod 700 /opt/db/init-${APP}.sh && /opt/db/init-${APP}.sh"
 
@@ -255,8 +257,8 @@ if [ "$ENGINE" = pg ]; then
     for n in "${NODES[@]}"; do
       [ "$n" = "$PRIMARY" ] && continue
       gen_pg_compose "$n" > "$GEN/docker-compose.yml"
-      scp "${SSHOPTS[@]}" "$GEN/docker-compose.yml" "root@$(map_ip "$n"):/opt/db/pg-${APP}/docker-compose.yml"
-      scp "${SSHOPTS[@]}" "$GEN/bb.sh" "root@$(map_ip "$n"):/opt/db/pg-${APP}/bb.sh"
+      scp "${SCPOPTS[@]}" "$GEN/docker-compose.yml" "root@$(map_ip "$n"):/opt/db/pg-${APP}/docker-compose.yml"
+      scp "${SCPOPTS[@]}" "$GEN/bb.sh" "root@$(map_ip "$n"):/opt/db/pg-${APP}/bb.sh"
       run_on "$n" "chmod 700 /opt/db/pg-${APP}/bb.sh && bash /opt/db/pg-${APP}/bb.sh && cd /opt/db/pg-${APP} && docker compose up -d"
     done
     sleep 3
@@ -294,7 +296,7 @@ elif [ "$ENGINE" = mongo ]; then
   done
   for n in "${START_NODES[@]}"; do
     gen_mongo_compose "$n" > "$GEN/docker-compose.yml"
-    scp "${SSHOPTS[@]}" "$GEN/docker-compose.yml" "root@$(map_ip "$n"):/opt/db/mongo-${APP}/docker-compose.yml"
+    scp "${SCPOPTS[@]}" "$GEN/docker-compose.yml" "root@$(map_ip "$n"):/opt/db/mongo-${APP}/docker-compose.yml"
     run_on "$n" "cd /opt/db/mongo-${APP} && docker compose up -d"
   done
 
@@ -337,7 +339,7 @@ exit 1
 EOF
     sed -i "s/@APP@/${APP}/g; s|@CFG@|${CFG}|g" "$GEN/rs-init.sh"
     sed -i "s/@APP@/${APP}/g" "$GEN/rs-wait.sh"
-    scp "${SSHOPTS[@]}" "$GEN/rs-init.sh" "$GEN/rs-wait.sh" "root@${PRIMARY_IP}:/opt/db/"
+    scp "${SCPOPTS[@]}" "$GEN/rs-init.sh" "$GEN/rs-wait.sh" "root@${PRIMARY_IP}:/opt/db/"
     run_on "$PRIMARY" "chmod 700 /opt/db/rs-init.sh /opt/db/rs-wait.sh && /opt/db/rs-init.sh && /opt/db/rs-wait.sh"
   fi
 
