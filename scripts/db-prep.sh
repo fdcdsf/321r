@@ -35,11 +35,11 @@ mkdir -p /etc/db/apps.d /etc/db/secrets /var/lib/dbdata /var/lib/pgwal /var/lib/
 
 # --- 4) карта нод (PLAN §2; Swarm-имя = hostname ноды на момент join) ---
 if [ ! -f /etc/db/nodes.map ]; then
-  cat > /etc/db/nodes.map <<'EOF'
+  cat > /etc/db/nodes.map <<'MAPEOF'
 a 10.66.0.1 naval-chocolate.ptr.network
 b 10.66.0.2 absent-coral.play2go.cloud
 c 10.66.0.3 debian
-EOF
+MAPEOF
   chmod 600 /etc/db/nodes.map
 fi
 
