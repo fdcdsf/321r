@@ -199,7 +199,9 @@ deploy_proxy() { # $1 = alias узла
   if ! run_on "$1" 'test -f /opt/db/proxy/haproxy.cfg'; then
     scp "${SCPOPTS[@]}" "$GEN/base.cfg" "root@${nip}:/opt/db/proxy/haproxy.cfg"
   fi
-  run_on "$1" "sed -i '/# BEGIN ${APP}/,/# END ${APP}/d' /opt/db/proxy/haproxy.cfg"
+  # правим БЕЗ замены inode: sed -i подкладывает новый файл, а ro-монтирование контейнера
+  # держит старую копию — правим через tmp + cat > (нижний аппенд и так не меняет inode)
+  run_on "$1" "sed '/# BEGIN ${APP}/,/# END ${APP}/d' /opt/db/proxy/haproxy.cfg > /opt/db/proxy/haproxy.tmp && cat /opt/db/proxy/haproxy.tmp > /opt/db/proxy/haproxy.cfg && rm -f /opt/db/proxy/haproxy.tmp"
   scp "${SCPOPTS[@]}" "$GEN/block.cfg" "root@${nip}:/opt/db/proxy/block.cfg"
   # конфиг должен быть читаем ИЗ контейнера: haproxy в образе идёт не от root,
   # а файлы от нас уходят с umask 077 (0600) — чиним права после дозаписи блока
