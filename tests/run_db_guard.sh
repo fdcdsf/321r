@@ -325,6 +325,29 @@ grep -q 'апстрим прокси → 10.66.0.3' "$ROOT/F/mock/logger.log" &&
 grep -q 'ПРОМОУШЕН' "$ROOT/F/mock/logger.log" && bad "лишний промоушен" || ok "без лишнего промоушена"
 [ "$(stat -c %a "$ROOT/F/opt/db/proxy/haproxy.cfg")" = 644 ] && ok "права 644" || bad "права не 644"
 
+# ============ H: мой инстанс лежит — ОДИН сигнал, без спама ============
+# Регрессия инцидента 2026-11-10: контейнер стендбая на a лежал 2 часа, а журнал молчал —
+# все ветки тика про него молчали. Теперь: сигнал при падении, сигнал при возврате.
+echo "--- H: инстанс не отвечает — сигнал один раз; вернулся — сигнал возврата ---"
+make_sandbox H
+printf 'b' > "$ROOT/H/mock/label.pangolin.absent-coral.play2go.cloud"   # designated = b
+printf '' > "$ROOT/H/mock/pg.recovery"                                  # контейнер НЕ отвечает (rec пуст)
+printf 'host=10.66.0.2 port=59999 user=replicator password=x' > "$ROOT/H/mock/pg.conninfo"
+fresh_vote H a; fresh_vote H b; fresh_vote H c
+rc="$(run_guard H naval-chocolate.ptr.network 0 0)"                     # я = a (стендбай)
+[ "$rc" = 0 ] && ok "exit 0" || bad "exit=$rc"
+grep -q 'мой инстанс НЕ отвечает' "$ROOT/H/mock/logger.log" && ok "сигнал о падении записан" || bad "нет сигнала о падении"
+[ -f "$ROOT/H/var/db-guard/down.pangolin" ] && ok "маркер down создан" || bad "нет маркера down"
+rc="$(run_guard H naval-chocolate.ptr.network 0 0)"                     # второй тик — не спамим
+[ "$rc" = 0 ] && ok "exit 0 (2-й тик)" || bad "exit=$rc"
+n="$(grep -c 'мой инстанс НЕ отвечает' "$ROOT/H/mock/logger.log" 2>/dev/null || true)"
+[ "$n" = 1 ] && ok "повторного спама нет (всего $n)" || bad "спам: $n сообщений"
+printf 't' > "$ROOT/H/mock/pg.recovery"                                 # инстанс вернулся
+rc="$(run_guard H naval-chocolate.ptr.network 0 0)"
+[ "$rc" = 0 ] && ok "exit 0 (3-й тик)" || bad "exit=$rc"
+grep -q 'мой инстанс снова отвечает' "$ROOT/H/mock/logger.log" && ok "сигнал о возврате записан" || bad "нет сигнала о возврате"
+[ ! -f "$ROOT/H/var/db-guard/down.pangolin" ] && ok "маркер down снят" || bad "маркер down остался"
+
 # ============ G: ВЕРНЫЙ конфиг при мёртвом приёмнике — петли рестартов НЕТ ============
 # Регрессия бага с ноды c: walreceiver мёртв (таймлайн 5≠1) → pg_stat_wal_receiver пуст,
 # старая проверка врала «не перевешан» и зациклила рестарт каждые ~12 с. Проверяем КОНФИГ.

@@ -143,6 +143,23 @@ next_of() { # следующий по цепи S(X) после $1; пусто �
   return 0
 }
 
+watch_instance() { # $1=app $2=состояние (пусто = мой инстанс не отвечает) $3=контейнер.
+  # Один сигнал при падении, один при возврате — без спама на каждом тике.
+  # Зачем: ручной docker stop / сбой оставляли инстанс лежать МОЛЧА (все ветки тика
+  # про него молчали) — инцидент 2026-11-10: контейнер на a лежал 2 часа без единой записи.
+  local app="$1" st="$2" ctr="$3" f="$STATE_DIR/down.$1"
+  if [ -z "$st" ]; then
+    if [ ! -f "$f" ]; then
+      touch "$f"
+      log "$app: мой инстанс НЕ отвечает — контейнер $ctr лежит? нужен 'docker start $ctr'"
+    fi
+  elif [ -f "$f" ]; then
+    rm -f "$f"
+    log "$app: мой инстанс снова отвечает ($st)"
+  fi
+  return 0
+}
+
 claim() { # $1=app $2=alias — перехват метки первичного (метка живёт ТОЛЬКО на узле первичного,
   # иначе после failover чтение по порядку S найдёт устаревшую копию на старом узле).
   # docker node update — read-modify-write всего Spec: соседний тик (голос vote...) может
@@ -315,6 +332,7 @@ for REG in /etc/db/apps.d/*.yaml; do
 
   if [ "$ENGINE" = pg ]; then
     rec="$(pg_recovery "$APP")"
+    [ -d "/var/lib/dbdata/pg-$APP" ] && watch_instance "$APP" "$rec" "pg-$APP"
 
     # --- назначение: объявлен мёртвым, я — следующий по цепи ---
     if [ "$DEAD_DECLARED" = 1 ]; then
@@ -388,6 +406,7 @@ for REG in /etc/db/apps.d/*.yaml; do
 
   else # ---------------- MongoDB ----------------
     mst="$(mongo_state "$APP")"
+    [ -d "/var/lib/dbdata/mongo-$APP" ] && watch_instance "$APP" "$mst" "mongod-$APP"
     D_HOST=""; [ -n "$D_IP" ] && D_HOST="$D_IP:$PORT"
     MY_HOST="$ME_IP:$PORT"
 
