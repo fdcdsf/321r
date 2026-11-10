@@ -45,7 +45,8 @@ services:
       - 443:8443 # resources
       - 80:80 # web (ping, redirects, ACME HTTP-01)
       - 3004:3004 # gerbil api (только mesh: self + соседние ноды)
-      - 8443:3000 # дашборд Pangolin (:3000 наружу закрыт)
+      - 8443:3000 # дашборд Pangolin (основной путь — через 443, см. dynamic_config.yml)
+      - 2053:3000 # дашборд, запасной порт (план §3; 8443 из РФ режется DPI)
 
   traefik:
     image: docker.io/traefik:v3.7.11

@@ -1,6 +1,10 @@
 # Traefik dynamic_config.yml — дашборд Pangolin (роутеры UI/API/WS) и DNS-прокси.
-# Взято из docs.pangolin.net/self-host/clustering/deploy-a-cluster — одинаково на всех
-# нодах, не рендерится. Ресурсные роутеры Pangolin дописывает сюда же (file_mode).
+# Основа: docs.pangolin.net/self-host/clustering/deploy-a-cluster. Наши отличия:
+#   - роутеры дашборда привязаны к Host(pangolin.321r.ru) и висят на ДВУХ entrypoint:
+#     dashboard (:3000, публикуется как 8443/2053) И websecure (:443, через SNI-прокси
+#     gerbil) — порт 8443 из РФ режется, стандартный 443 проходит (проверено 2026-11-10);
+#   - TLS через certResolver letsencrypt (HTTP-01 на :80).
+# Ресурсные роутеры Pangolin дописывает сюда же (file_mode).
 http:
   middlewares:
     badger:
@@ -11,30 +15,39 @@ http:
   routers:
     # Next.js router (handles everything except API and WebSocket paths)
     next-router:
-      rule: "!PathPrefix(`/api/v1`)"
+      rule: "Host(`pangolin.321r.ru`) && !PathPrefix(`/api/v1`)"
       service: next-service
       entryPoints:
         - dashboard
+        - websecure
       middlewares:
         - badger
+      tls:
+        certResolver: letsencrypt
 
     # API router (handles /api/v1 paths)
     api-router:
-      rule: "PathPrefix(`/api/v1`)"
+      rule: "Host(`pangolin.321r.ru`) && PathPrefix(`/api/v1`)"
       service: api-service
       entryPoints:
         - dashboard
+        - websecure
       middlewares:
         - badger
+      tls:
+        certResolver: letsencrypt
 
     # WebSocket router
     ws-router:
-      rule: "PathPrefix(`/`)"
+      rule: "Host(`pangolin.321r.ru`) && PathPrefix(`/`)"
       service: api-service
       entryPoints:
         - dashboard
+        - websecure
       middlewares:
         - badger
+      tls:
+        certResolver: letsencrypt
 
   services:
     next-service:

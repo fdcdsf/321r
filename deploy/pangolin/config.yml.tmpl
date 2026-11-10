@@ -9,7 +9,7 @@ gerbil:
     exit_node_name: "__EXIT_NODE__"
 
 app:
-    dashboard_url: "https://pangolin.321r.ru:8443"
+    dashboard_url: "https://pangolin.321r.ru"
     log_level: "info"
 
 postgres:
@@ -22,7 +22,7 @@ traefik:
 server:
     secret: "__SERVER_SECRET__"
     cors:
-        origins: ["https://pangolin.321r.ru:8443"]
+        origins: ["https://pangolin.321r.ru", "https://pangolin.321r.ru:8443", "https://pangolin.321r.ru:2053"]
         methods: ["GET", "POST", "PUT", "DELETE", "PATCH"]
         allowed_headers: ["X-CSRF-Token", "Content-Type"]
         credentials: false
