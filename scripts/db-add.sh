@@ -122,7 +122,8 @@ if [ -f "$DIR/PG_VERSION" ]; then
   echo "данные уже есть — basebackup пропущен"
 else
   # сначала владелец (внутри образа uid postgres), иначе pg_basebackup от root не стартует
-  docker run --rm -v "$DIR":/data postgres:17-alpine chown -R postgres:postgres /data
+  docker run --rm -v "$DIR":/data -v /var/lib/pgwal/@APP@:/pwal postgres:17-alpine \
+    chown -R postgres:postgres /data /pwal
   docker run --rm -u postgres -e PGPASSWORD="$REPL_PASSWORD" -v "$DIR":/data postgres:17-alpine \
     pg_basebackup -h @PRIMARY_IP@ -p @PORT@ -U replicator -D /data -R -X stream
   # свой primary_conninfo (с паролем) поверх строки от -R
@@ -236,6 +237,12 @@ if [ "$ENGINE" = pg ]; then
   # ---------------- PostgreSQL ----------------
   for n in "${NODES[@]}"; do
     run_on "$n" "mkdir -p /opt/db/pg-${APP} /var/lib/dbdata/pg-${APP} /var/lib/pgwal/${APP}"
+  done
+  # каталог WAL-архива создаёт root, а пишет в него postgres из контейнера → archive_command
+  # падал с Permission denied на ВСЕХ нодах с самого начала (вскрыто дрилом 2026-11-10).
+  # Чиним владельца через сам образ — uid образа, без хардкода чисел.
+  for n in "${NODES[@]}"; do
+    run_on "$n" "docker run --rm -v /var/lib/pgwal/${APP}:/pwal postgres:17-alpine chown -R postgres:postgres /pwal"
   done
 
   # секреты: генерируются на первичном, раздаются узлам S
