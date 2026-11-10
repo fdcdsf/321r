@@ -195,7 +195,9 @@ EOF
   fi
 }
 
-deploy_proxy() { # $1 = alias узла
+deploy_proxy() { # $1 = alias узла. Блок приложения ставится на ВСЕ ноды (не только S(X)):
+  # адрес VIP:порт обязан работать одинаково везде (PLAN §4) — иначе клиент вне S(X)
+  # получает ECONNREFUSED (вскрыто дрилом Mongo 2026-11-10).
   local nip; nip="$(map_ip "$1")"
   ssh "${SSHOPTS[@]}" "root@$nip" 'mkdir -p /opt/db/proxy'
   if ! run_on "$1" 'test -f /opt/db/proxy/haproxy.cfg'; then
@@ -283,7 +285,7 @@ if [ "$ENGINE" = pg ]; then
 
   if [ "$CLASS" = cluster ]; then
     gen_proxy
-    for n in "${NODES[@]}"; do deploy_proxy "$n"; done
+    for n in "${ALL_NODES[@]}"; do deploy_proxy "$n"; done
     echo "=== первичный $PRIMARY: pg_stat_replication ==="
     run_on "$PRIMARY" "docker exec -u postgres pg-${APP} psql -U postgres -c 'SELECT application_name, client_addr, state, sync_state FROM pg_stat_replication'"
     for n in "${NODES[@]}"; do
@@ -362,7 +364,7 @@ EOF
 
   if [ "$CLASS" = cluster ]; then
     gen_proxy
-    for n in "${NODES[@]}"; do deploy_proxy "$n"; done
+    for n in "${ALL_NODES[@]}"; do deploy_proxy "$n"; done
     echo "=== реплика-сет $APP ==="
     run_on "$PRIMARY" "docker exec mongod-${APP} mongosh --quiet --eval 'rs.status().members.forEach(m => print(m.name, m.stateStr))'"
     echo "=== прокси на VIP:${PORT} ==="
