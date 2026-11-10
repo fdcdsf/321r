@@ -29,6 +29,10 @@ ufw allow from 172.16.0.0/12 to any port 5432:5499  proto tcp comment 'db-vip-pg
 ufw allow from 172.16.0.0/12 to any port 27017:27099 proto tcp comment 'db-vip-mongo'   >/dev/null
 ufw allow from 10.0.0.0/8     to any port 5432:5499  proto tcp comment 'db-vip-pg-ovl'   >/dev/null
 ufw allow from 10.0.0.0/8     to any port 27017:27099 proto tcp comment 'db-vip-mongo-ovl' >/dev/null
+# Valkey (шаг 5) слушает mesh-адрес ноды, а не VIP — свой порт; правило было добавлено
+# вручную при деплое (2026-11-10), здесь — чтобы пересборка ноды / новые D,E не потеряли его.
+ufw allow from 172.16.0.0/12 to any port 6379 proto tcp comment 'db-valkey'    >/dev/null
+ufw allow from 10.0.0.0/8     to any port 6379 proto tcp comment 'db-valkey-ovl' >/dev/null
 
 # --- 3) каталоги ---
 mkdir -p /etc/db/apps.d /etc/db/secrets /var/lib/dbdata /var/lib/pgwal /var/lib/pgbackup /opt/db

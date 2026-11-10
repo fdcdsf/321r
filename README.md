@@ -29,8 +29,11 @@
 
 ## Быстрый старт
 
-1. Заполнить `<IP-A/B/C>` в [docs/dns.md](docs/dns.md) → создать записи в Cloudflare.
-2. Чек-лист фазы 0 в [PLAN.md](PLAN.md).
+1. Чек-листы фаз — в [PLAN.md](PLAN.md); статус — в таблице выше. DNS уже создан
+   (записи в [docs/dns.md](docs/dns.md) — актуальные IP на случай ручных проверок).
+2. Память проекта для продолжения работ — [llm_memoru/MEMORY.md](llm_memoru/MEMORY.md);
+   аудит и требования — [llm_memoru/AUDIT.md](llm_memoru/AUDIT.md),
+   [llm_memoru/REQUIREMENTS.md](llm_memoru/REQUIREMENTS.md).
 3. Дальше — по фазам, не идя дальше, пока не зелёные проверки.
 
 ## Ключевые решения (чтобы не переоткрывать)
