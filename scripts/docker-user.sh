@@ -7,6 +7,7 @@ set -euo pipefail
 
 MESH="10.66.0.0/24"
 PUBLIC_TCP="80 443 8443 2053"   # контейнерные порты из таблицы §3; дополнять при новых
+PUBLIC_UDP="53 21820 51820"     # Pangolin (фаза 5): DNS + WireGuard relay + WireGuard
 
 iptables -N DOCKER-USER 2>/dev/null || true
 iptables -F DOCKER-USER
@@ -17,6 +18,9 @@ iptables -A DOCKER-USER -s 192.168.0.0/16 -j ACCEPT
 iptables -A DOCKER-USER -i lo -j ACCEPT
 for p in $PUBLIC_TCP; do
   iptables -A DOCKER-USER -p tcp --dport "$p" -j ACCEPT
+done
+for p in $PUBLIC_UDP; do
+  iptables -A DOCKER-USER -p udp --dport "$p" -j ACCEPT
 done
 iptables -A DOCKER-USER -j DROP
 
@@ -30,6 +34,9 @@ if command -v ip6tables >/dev/null 2>&1; then
   ip6tables -A DOCKER-USER -i lo -j ACCEPT 2>/dev/null || true
   for p in $PUBLIC_TCP; do
     ip6tables -A DOCKER-USER -p tcp --dport "$p" -j ACCEPT 2>/dev/null || true
+  done
+  for p in $PUBLIC_UDP; do
+    ip6tables -A DOCKER-USER -p udp --dport "$p" -j ACCEPT 2>/dev/null || true
   done
   ip6tables -A DOCKER-USER -j DROP 2>/dev/null || true
 fi

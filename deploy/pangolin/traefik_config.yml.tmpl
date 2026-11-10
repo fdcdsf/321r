@@ -1,0 +1,61 @@
+# Traefik config (одинаков на всех нодах, кроме почты — __EMAIL__). Основа:
+# docs.pangolin.net/self-host/clustering/deploy-a-cluster (Step "Write the Traefik configuration").
+# Наши отличия: у дашборда (:3000, публикуется как host:8443) включён TLS с
+# certResolver letsencrypt (HTTP-01 на :80) — «балансировщик» у нас = multi-A DNS,
+# поэтому TLS дашборда Terminирует traefik на каждой ноде (в гайде — внешний LB).
+providers:
+  file:
+    directory: "/var/dynamic"
+    watch: true
+
+experimental:
+  plugins:
+    badger:
+      moduleName: "github.com/fosrl/badger"
+      version: "v1.7.0"
+
+log:
+  level: "INFO"
+  format: "common"
+  maxSize: 100
+  maxBackups: 3
+  maxAge: 3
+  compress: true
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+    proxyProtocol: # We trust gerbil upstream
+      trustedIPs:
+        - 0.0.0.0/0
+        - ::1/128
+    transport:
+      respondingTimeouts:
+        readTimeout: "30m"
+    http:
+      encodedCharacters:
+        allowEncodedSlash: true
+        allowEncodedQuestionMark: true
+  dashboard:
+    address: ":3000"
+    http:
+      tls:
+        certResolver: letsencrypt
+  dns:
+    address: ":53/udp"
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: __EMAIL__
+      httpChallenge:
+        entryPoint: web
+      storage: /var/certificates/traefik-acme.json
+
+serversTransport:
+  insecureSkipVerify: true
+
+ping:
+  entryPoint: "web"
