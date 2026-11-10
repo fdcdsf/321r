@@ -157,8 +157,10 @@ claim() { # $1=app $2=alias — перехват метки первичного
       [ "$n" = "$new" ] && continue
       d="$(docker node inspect "$(map_swarm "$n")" --format "$fmt" 2>/dev/null)" || d="__NOINSPECT__"
       case "$d" in ""|"<no value>") continue ;; esac     # метки нет — нечего снимать
-      out="$(docker node update --label-remove "db-primary-$app" "$(map_swarm "$n")" 2>&1)" || \
-        log "$app: label-remove на $n не прошёл (попытка $i): ${out:-пусто}"
+      # флаг РЕАЛЬНЫЙ: docker node update имеет --label-rm (а не --label-remove — rc=125;
+      # именно этим в дрели снятие метки молча не работало и происходил флэп)
+      out="$(docker node update --label-rm "db-primary-$app" "$(map_swarm "$n")" 2>&1)" || \
+        log "$app: label-rm на $n не прошёл (попытка $i): ${out:-пусто}"
     done
     out="$(docker node update --label-add "db-primary-$app=$new" "$(map_swarm "$new")" 2>&1)" || \
       log "$app: label-add на $new не прошёл (попытка $i): ${out:-пусто}"
@@ -214,9 +216,12 @@ pg_become_standby() { # $1=app $2=ip первичного: переписать 
   return 1
 }
 
-pg_wal_target_ok() { # стендбай уже смотрит на $2?
+pg_wal_target_ok() { # стендбай УЖЕ настроен на $2? Сравниваем КОНФИГ (SHOW primary_conninfo),
+  # а не состояние приёмника (pg_stat_wal_receiver): при мёртвом приёмнике (таймлайн 5≠1 —
+  # нода c в дрели) receiver-строка пуста, старая проверка врала «не перевешан» и зацикливала
+  # рестарт каждые ~12 с. Конфиг верен → просто ждём, пока приёмник оживёт сам (или пересборка).
   docker exec -u postgres "pg-$1" psql -U postgres -tAc \
-    'SELECT conninfo FROM pg_stat_wal_receiver' 2>/dev/null | grep -q "host=$2"
+    'SHOW primary_conninfo' 2>/dev/null | grep -q "host=$2 port="
 }
 
 pg_proxy_repoint() { # $1=app $2=ip апстрима — на любой ноде, где есть блок приложения
