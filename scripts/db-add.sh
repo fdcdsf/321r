@@ -213,7 +213,9 @@ deploy_proxy() { # $1 = alias узла. Блок приложения стави
   scp "${SCPOPTS[@]}" "$GEN/proxy-compose.yml" "root@${nip}:/opt/db/proxy/docker-compose.yml"
   # сначала поднять/пересоздать (монтирование подхватит файл), потом проверить конфиг
   # ВНУТРИ контейнера и только при успехе — USR1 (падение проверки = видимая ошибка db-add)
-  run_on "$1" "cd /opt/db/proxy && docker compose up -d && docker exec db-proxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && docker kill -s USR1 db-proxy"
+  # USR1 = для Docker явная остановка (autorestart не поднимает!) — прокси умирал на месте;
+  # docker restart детерминированно поднимает с новым конфигом (дрилл 2026-11-10)
+  run_on "$1" "cd /opt/db/proxy && docker compose up -d && docker exec db-proxy haproxy -c -f /usr/local/etc/haproxy/haproxy.cfg && docker restart db-proxy"
 }
 
 set_labels() { # svc.<app> на узлы S; db-primary-<app> = алиас первичного (запуск на менеджере)

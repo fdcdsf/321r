@@ -256,11 +256,15 @@ pg_proxy_repoint() { # $1=app $2=ip апстрима — на любой нод�
     log "$app: конфиг прокси не прошёл haproxy -c — переключение пропущено"
     return 1
   }
-  docker kill -s USR1 db-proxy >/dev/null 2>&1 || true
-  sleep 1
+  # НЕ USR1: docker kill -s <сигнал> для Docker = «остановлен пользователем», и политика
+  # unless-stopped НЕ поднимает такой контейнер — прокси мёртв до ручного старта
+  # (вскрыто дрилом Mongo 2026-11-10; старый fallback через 1 с был гонкой и промахивался).
+  # docker restart поднимает заново с уже изменённым конфигом — детерминированно.
+  docker restart db-proxy >/dev/null 2>&1 || true
+  sleep 2
   if ! docker inspect -f '{{.State.Running}}' db-proxy 2>/dev/null | grep -q true; then
     docker compose -f /opt/db/proxy/docker-compose.yml up -d >/dev/null 2>&1 || true
-    log "$app: прокси упал после переключения — поднят заново"
+    log "$app: прокси не поднялся после перезагрузки — поднят заново"
   fi
   log "$app: апстрим прокси → $dip"
   return 0

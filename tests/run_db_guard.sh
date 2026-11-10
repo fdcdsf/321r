@@ -104,6 +104,7 @@ case "${a[0]}" in
     exit 0 ;;
   restart)
     app="${a[1]#pg-}"
+    [ "$app" = db-proxy ] && exit 0   # рестарт прокси не трогает состояние PG-мока
     if [ -f "$SB/var/dbdata/pg-$app/standby.signal" ]; then printf 't' > "$MOCK/pg.recovery"
     else printf 'f' > "$MOCK/pg.recovery"; fi
     exit 0 ;;
@@ -322,6 +323,8 @@ rc="$(run_guard F naval-chocolate.ptr.network 0 0)"
 [ "$rc" = 0 ] && ok "exit 0" || bad "exit=$rc"
 grep -q 'server primary 10.66.0.3:59999' "$ROOT/F/opt/db/proxy/haproxy.cfg" && ok "апстрим переключён на c" || bad "апстрим не переключён"
 grep -q 'апстрим прокси → 10.66.0.3' "$ROOT/F/mock/logger.log" && ok "лог переключения" || bad "нет лога переключения"
+grep -q 'restart db-proxy' "$ROOT/F/mock/docker.log" && ok "прокси перезапущен (не USR1)" || bad "прокси не перезапускался"
+grep -q 'kill -s USR1' "$ROOT/F/mock/docker.log" && bad "USR1 снова убивает прокси!" || ok "USR1 не используется"
 grep -q 'ПРОМОУШЕН' "$ROOT/F/mock/logger.log" && bad "лишний промоушен" || ok "без лишнего промоушена"
 [ "$(stat -c %a "$ROOT/F/opt/db/proxy/haproxy.cfg")" = 644 ] && ok "права 644" || bad "права не 644"
 
