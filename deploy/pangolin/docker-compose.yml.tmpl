@@ -56,6 +56,8 @@ services:
     depends_on:
       pangolin:
         condition: service_healthy
+    env_file:
+      - /etc/db/secrets/traefik-cf.env # CF_DNS_API_TOKEN для ACME DNS-01
     command:
       - --configFile=/etc/traefik/traefik_config.yml
     volumes:

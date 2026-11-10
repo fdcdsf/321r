@@ -52,9 +52,12 @@ certificatesResolvers:
   letsencrypt:
     acme:
       email: __EMAIL__
-      httpChallenge:
-        entryPoint: web
       storage: /var/certificates/traefik-acme.json
+      # DNS-01 через Cloudflare API: HTTP-01 при multi-A (3 IP на одно имя) невозможен —
+      # Let's Encrypt multi-VA проверяет все A-записи, а challenge живёт только на той
+      # ноде, которая его создала (проверено 2026-11-10). Токен — env_file traefik-cf.env.
+      dnsChallenge:
+        provider: cloudflare
 
 serversTransport:
   insecureSkipVerify: true
