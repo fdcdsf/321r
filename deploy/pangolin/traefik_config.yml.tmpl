@@ -39,7 +39,9 @@ entryPoints:
         allowEncodedSlash: true
         allowEncodedQuestionMark: true
   dashboard:
-    address: ":3000"
+    address: ":2053" # контейнерный порт из таблицы §3 (хост: 8443 и 2053 → 2053);
+                     # порт :3000 намеренно НЕ используется — DOCKER-USER считает
+                     # контейнерные порты, а 3000 в белом списке нет
     http:
       tls:
         certResolver: letsencrypt
