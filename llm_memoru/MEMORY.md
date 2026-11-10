@@ -91,7 +91,21 @@ a ARBITER**. Прокси везде на текущего первичного.
 MaxMind GeoLite2 (2 mmdb в config/ каждой ноды), Telegram-бот, проверка оплаты VPS,
 age-ключ → менеджер паролей + печать (локально!).
 
-**Дальше по плану:** **6б (Komodo + стеки)** → 5 (Pangolin-кластер) → 8 (бэкапы по правилу
+**Komodo (фаза 6б — ЗАКРЫТА 2026-11-10):** Core = swarm-сервис `komodo_core` (constraint
+`role != state`, ghcr.io/moghtech/komodo-core:2, порт 9120 ingress — из мира закрыт
+DOCKER-USER; БД — `mongodb://10.66.0.99:27017/?replicaSet=rs_komodo`). Личность Core
+стабильна при переездах: X25519-ключ в docker secret `komodo-core-key`, periphery пинит его
+через drop-in `PERIPHERY_CORE_PUBLIC_KEYS`. Periphery ×3: systemd, outbound `ws://<self-mesh>:9120`,
+connect-as a/b/c, onboarding-key в `/etc/db/secrets/komodo-onboarding.key` (создаётся через API).
+Стеки: `uptime-kuma` (work/bulk, SQLite-том локальный), `test-whoami` (git `fdcdsf/public_test` → c).
+Секреты Komodo: `/etc/db/secrets/komodo.env` (admin password/jwt/webhook), `komodo-keys/core.{key,pub}`.
+
+**API Komodo (шпаргалка):** `POST /<модуль>/<Операция>` + ПРОСТОЕ тело params (НЕ wrapped —
+wrapped на голом `/auth` даёт 405!). Вход: `/auth/login/LoginLocalUser {"username","password"}` →
+токен (извлечь grep'ом `"jwt"`); дальше header `Authorization: <токен>`:
+`/write/CreateOnboardingKey`, `/write/CreateStack`, `/execute/DeployStack`, `/read/ListServers`.
+
+**Дальше по плану:** **5 (Pangolin-кластер)** → 8 (бэкапы по правилу
 «2 соседние», мониторинг, runbook) → 9 (Remnawave) → 10 (Публикация — ПОСЛЕДНЯЯ: обезличить
 инстанс, bootstrap парой команд, публичный репозиторий). Узлы — профили, не имена (принцип 10):
 N ≥ 3 любых серверов; текущий стенд a/b/c — пример.

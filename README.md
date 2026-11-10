@@ -22,7 +22,7 @@
 | 3 | Firewall | ✅ готово (2026-11-09: SSH 2222+ключи, ufw по §3, rate-limit 53, fail2ban, nmap-сверка, IPv6-зеркало) |
 | 6а | Swarm: инфраструктура + DOCKER-USER | ✅ готово (2026-11-09: swarm 3× Ready, метки ролей, ufw-mesh, DOCKER-USER + тесты DROP) |
 | 4 | Общий слой БД: PostgreSQL (D1, primary/standby) + MongoDB (RS) + Valkey | ✅ готово (2026-11-10: все проверки + 3 дрила пройдены; 6 находок исправлено — см. docs/drills.md) |
-| 6б | Komodo и стеки | ⬜ |
+| 6б | Komodo и стеки | ✅ готово (2026-11-10: Core swarm-сервис + periphery ×3, дриллы Mongo (24 с) и «нода ложится» пройдены, тестовый стек из git выкачен; UI — после фазы 5) |
 | 5 | Pangolin-кластер | ⬜ |
 | 8 | Бэкапы (без R2: копии между VPS), мониторинг, runbook | ⬜ |
 | 9 | Remnawave | ⬜ |
