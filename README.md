@@ -21,7 +21,7 @@
 | 2 | DDNS + меш (AmneziaWG) | ✅ готово (2026-11-09: дриллы + 2 дня наблюдения) |
 | 3 | Firewall | ✅ готово (2026-11-09: SSH 2222+ключи, ufw по §3, rate-limit 53, fail2ban, nmap-сверка, IPv6-зеркало) |
 | 6а | Swarm: инфраструктура + DOCKER-USER | ✅ готово (2026-11-09: swarm 3× Ready, метки ролей, ufw-mesh, DOCKER-USER + тесты DROP) |
-| 4 | Общий слой БД: PostgreSQL (D1, primary/standby) + MongoDB (RS) + Valkey | 🔄 **в работе** (2026-11-10: шаги 1–6; реплика PG и RS Mongo живы, db-guard развёрнут; первый дрилл промоушена вскрыл 2 бага — исправлены `711f988`+`8ba4a95`; повторный дрилл назначен) |
+| 4 | Общий слой БД: PostgreSQL (D1, primary/standby) + MongoDB (RS) + Valkey | ✅ готово (2026-11-10: все проверки + 3 дрила пройдены; 6 находок исправлено — см. docs/drills.md) |
 | 6б | Komodo и стеки | ⬜ |
 | 5 | Pangolin-кластер | ⬜ |
 | 8 | Бэкапы (без R2: копии между VPS), мониторинг, runbook | ⬜ |
