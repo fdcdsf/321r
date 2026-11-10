@@ -27,7 +27,7 @@ services:
       KOMODO_INIT_ADMIN_USERNAME: admin
       KOMODO_INIT_ADMIN_PASSWORD_FILE: /run/secrets/komodo-admin-password
       KOMODO_JWT_SECRET_FILE: /run/secrets/komodo-jwt-secret
-      KOMODO_JWT_TTL: "1-week"
+      KOMODO_JWT_TTL: "1-wk"
       KOMODO_WEBHOOK_SECRET_FILE: /run/secrets/komodo-webhook-secret
       KOMODO_PRIVATE_KEY_FILE: /run/secrets/komodo-core-key
     ports:
