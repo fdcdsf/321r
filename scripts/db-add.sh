@@ -145,7 +145,7 @@ services:
     image: mongo:7
     container_name: mongod-${APP}
     restart: unless-stopped
-    mem_limit: 300m
+    mem_limit: 512m
     command: ["mongod","--bind_ip_all","--wiredTigerCacheSizeGB","0.256"${rs}]
     ports:
       - "${b}:${PORT}:27017"

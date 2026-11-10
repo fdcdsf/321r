@@ -133,6 +133,10 @@ age-ключ → менеджер паролей + печать (локальн�
   pg-<app> psql -h 10.66.0.99 -p 5432 -U postgres`.
 - Метки: `docker node inspect <swarm-имя> --format '{{json .Spec.Labels}}'`.
 - Тесты: git-bash → `bash tests/run_db_guard.sh` (итог `PASS=61 FAIL=0`).
+- Mongo/проверки RS: **только отдельным контейнером** —
+  `docker run --rm --network host mongo:7 mongosh "mongodb://10.66.0.99:27017/?replicaSet=rs_komodo" --quiet --eval '...'`.
+  НЕ `docker exec mongod-... mongosh` руками: mongosh внутри контейнера по OOM убил mongod
+  (инцидент 2026-11-10; db-guard своим мелким myState можно, руками — нельзя).
 - DOCKER-USER фенс — позиция 1; `scripts/docker-user.sh` при перезапуске СТИРАЕТ правила фенса.
 - curl exit: 0=open, 28=timeout, 7=refused.
 
