@@ -144,13 +144,38 @@ next_of() { # следующий по цепи S(X) после $1; пусто �
 }
 
 claim() { # $1=app $2=alias — перехват метки первичного (метка живёт ТОЛЬКО на узле первичного,
-  # иначе после failover чтение по порядку S найдёт устаревшую копию на старом узле)
-  local app="$1" new="$2" n
-  for n in "${ALL_NODES[@]}"; do
-    [ "$n" = "$new" ] && continue
-    docker node update --label-remove "db-primary-$app" "$(map_swarm "$n")" >/dev/null 2>&1 || true
+  # иначе после failover чтение по порядку S найдёт устаревшую копию на старом узле).
+  # docker node update — read-modify-write всего Spec: соседний тик (голос vote...) может
+  # прочитать Spec ДО нашей правки и записать ПОСЛЕ — тогда метка «возвращается» (рокировка
+  # на дрели как раз так и ловилась). Поэтому: inspect-first (узел без метки не трогаем),
+  # ошибки не глушим, после правки ПРОВЕРКА по всем нодам и до 3 попыток; расхождение —
+  # громкий лог, следующий тик повторит.
+  local app="$1" new="$2" n d out i ok
+  local fmt="{{index .Spec.Labels \"db-primary-$app\"}}"
+  for i in 1 2 3; do
+    for n in "${ALL_NODES[@]}"; do
+      [ "$n" = "$new" ] && continue
+      d="$(docker node inspect "$(map_swarm "$n")" --format "$fmt" 2>/dev/null)" || d="__NOINSPECT__"
+      case "$d" in ""|"<no value>") continue ;; esac     # метки нет — нечего снимать
+      out="$(docker node update --label-remove "db-primary-$app" "$(map_swarm "$n")" 2>&1)" || \
+        log "$app: label-remove на $n не прошёл (попытка $i): ${out:-пусто}"
+    done
+    out="$(docker node update --label-add "db-primary-$app=$new" "$(map_swarm "$new")" 2>&1)" || \
+      log "$app: label-add на $new не прошёл (попытка $i): ${out:-пусто}"
+    sleep 1
+    # верификация: метка есть ТОЛЬКО у $new и только с его значением
+    ok=1
+    for n in "${ALL_NODES[@]}"; do
+      d="$(docker node inspect "$(map_swarm "$n")" --format "$fmt" 2>/dev/null)" || d="__NOINSPECT__"
+      case "$d" in
+        ""|"<no value>") if [ "$n" = "$new" ]; then ok=0; fi ;;
+        *) if [ "$n" != "$new" ] || [ "$d" != "$new" ]; then ok=0; fi ;;
+      esac
+    done
+    if [ "$ok" = 1 ]; then return 0; fi
   done
-  docker node update --label-add "db-primary-$app=$new" "$(map_swarm "$new")" >/dev/null
+  log "$app: claim метки не сошёлся за 3 попытки (нужен $new) — повторим в следующем тике"
+  return 1
 }
 
 # ---------- PostgreSQL ----------
@@ -292,10 +317,21 @@ for REG in /etc/db/apps.d/*.yaml; do
       if [ -n "$nxt" ] && [ "$nxt" = "$ME_ALIAS" ] && [ "$inS" = 1 ]; then
         if [ "$rec" = t ]; then
           if promote_pg "$APP"; then
-            claim "$APP" "$ME_ALIAS" || log "$APP: claim метки не прошёл"
-            log "$APP: ПРОМОУШЕН — $ME_ALIAS стал первичным (голосов «мёртв» ≥ кворума)"
+            rec="f"    # я теперь первичный: ниже не должен сам себя «понизить»
+            if claim "$APP" "$ME_ALIAS"; then
+              log "$APP: ПРОМОУШЕН — $ME_ALIAS стал первичным (голосов «мёртв» ≥ кворума)"
+              designated="$ME_ALIAS"; D_IP="$ME_IP"   # прокси и остальные ветки тика — уже про меня
+            else
+              log "$APP: ПРОМОУШЕН — $ME_ALIAS стал первичным, но claim метки не прошёл — повторим"
+            fi
           else
             log "$APP: promote не удался — повторим в следующем тике"
+          fi
+        elif [ "$rec" = f ]; then
+          # я уже первичный (промоушен прошёл, но метка не перехватилась или устарела) — забираю
+          if claim "$APP" "$ME_ALIAS"; then
+            log "$APP: метка перехвачена → $ME_ALIAS (я уже первичный, designated $designated мёртв)"
+            designated="$ME_ALIAS"; D_IP="$ME_IP"
           fi
         elif [ -z "$rec" ]; then
           log "$APP: мой инстанс не отвечает — жду его возврата"
@@ -316,11 +352,18 @@ for REG in /etc/db/apps.d/*.yaml; do
     # --- шаг назад старого первичного / перевешивание стендбая ---
     if [ "$designated" != "$ME_ALIAS" ] && [ -n "$rec" ] && [ -n "$D_IP" ]; then
       if [ "$rec" = f ]; then
-        # большинство уже назначило другого — ухожу в стендбай (CP, метка = авторитет)
-        if pg_become_standby "$APP" "$D_IP"; then
-          log "$APP: СТАРЫЙ ПЕРВИЧНЫЙ $ME_ALIAS встал стендбаем → $D_IP"
+        if tcp_ok "$D_IP" "$PORT"; then
+          # большинство уже назначило другого И назначенный отвечает — ухожу в стендбай (CP)
+          if pg_become_standby "$APP" "$D_IP"; then
+            log "$APP: СТАРЫЙ ПЕРВИЧНЫЙ $ME_ALIAS встал стендбаем → $D_IP"
+          else
+            log "$APP: шаг назад не удался — повторим"
+          fi
         else
-          log "$APP: шаг назад не удался — повторим"
+          # designated мёртв/недоступен: НЕ ухожу в стендбай к мёртвому (рекординг-флэп из дрели).
+          # Жду: либо я следующий по цепи и заберу метку в ветке назначения выше,
+          # либо designated вернётся/будет перехвачен соседом — тогда шагну в следующем тике.
+          log "$APP: designated $designated недоступен — шаг назад отложен (жду его возврата или claim)"
         fi
       elif [ "$rec" = t ] && [ -n "$D_IP" ] && tcp_ok "$D_IP" "$PORT"; then
         if ! pg_wal_target_ok "$APP" "$D_IP"; then
@@ -348,8 +391,10 @@ for REG in /etc/db/apps.d/*.yaml; do
       nxt="$(next_of "$designated")"
       if [ -n "$nxt" ] && [ "$nxt" = "$ME_ALIAS" ] && [ "$inS" = 1 ]; then
         if [ "$mst" = 1 ] || [ "$mst" = 2 ]; then
-          claim "$APP" "$ME_ALIAS" || log "$APP: claim метки не прошёл"
-          log "$APP: метка перехвачена → $ME_ALIAS (первичный $designated объявлен мёртвым)"
+          if claim "$APP" "$ME_ALIAS"; then
+            log "$APP: метка перехвачена → $ME_ALIAS (первичный $designated объявлен мёртвым)"
+            designated="$ME_ALIAS"; D_IP="$ME_IP"   # ниже ветки тика — уже про меня
+          fi
         fi
       fi
     fi
