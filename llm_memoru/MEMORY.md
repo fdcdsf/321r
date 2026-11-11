@@ -177,6 +177,31 @@ N ≥ 3 любых серверов; текущий стенд a/b/c — при�
 - **API Komodo (`/auth/login/...`, порт 9120) и Pangolin (`/api/v1/...`, порт 8443) — разные
   продукты с разными API**; не путать (обе ошибки были).
 
+### Находки Pangolin — дни 2 (2026-11-11, «битва за nov.321r.ru»)
+- **Wildcard-домены в кластере Pangolin НЕ маршрутизируются** (тип «Wildcard» = только
+  одиночный сервер; проверено контрольным тестом: nov2.app.321r.ru (NS-зона) — мгновенный
+  200, nov.321r.ru (wildcard) — 404 навсегда). NS-делегированные зоны — рабочий путь.
+- **Управляемые конфигом домены** (`domains:` в config.yml + `disable_config_managed_domains:
+  false`) заводятся с verified=true БЕЗ DNS-валидации. Валидация ручных доменов сравнивает
+  `resolved.includes(record.value)`, но value = плейсхолдер «Server IP Address» (панель
+  подставляет IP инстанции при показе!) — проходит никогда. Мульти-A проходит по includes.
+- **Сетевая ловушка compose**: traefik с `network_mode: service:gerbil` — при рестарте
+  gerbil ПЕРЕСОЗДАВАТЬ и traefik (docker compose up -d --force-recreate gerbil traefik),
+  иначе traefik в осиротевшем netns → всё обрывается (000/EOF). Одиночный `docker restart`
+  запрещён!
+- **API Pangolin** (веб-морду не трогать — работает через API с сессией из браузера):
+  CSRF-заголовок `X-CSRF-Token: x-csrf-protection` (статическая строка).
+  Маршруты: `PUT /api/v1/org/{org}/domain` (создание домена), `DELETE .../domain/{id}`,
+  `PUT /api/v1/org/{org}/resource` (создание ресурса: name, subdomain, domainId, mode),
+  `PUT /api/v1/resource/{id}/target` (цель: siteId, ip, port, hc*), `POST /api/v1/target/{id}`
+  (обновление цели), `GET /api/v1/resource/{id}/targets`, `GET/DELETE .../dns-records`.
+- Маршрутизация ресурсов: gerbil → `get-resolved-hostname` (эндпоинты туннелей) → Newt.
+  Нездоровая цель (hcHealth=unhealthy) НЕ маршрутизируется (фильтр в resolveExitNodes).
+- DNS сделано: `*.321r.ru` A ×3 + `321r.ru` A ×3 (все IP, multi-A живучесть), NS-делегирование
+  `_acme-challenge.321r.ru → dns.321r.ru` (для wildcard-сертификатов через DNS-01).
+  Зона `app.321r.ru` (NS) — рабочий образец. Решение за владельцем: скрипт-обёртка /
+  жить в зоне / полная делегация зоны (стать своим DNS через reg.ru).
+
 ## 6. Памятка команд (быстрая)
 
 - Логи db-guard: `journalctl -t db-guard -n 30 --no-pager`; маркеры: `ПРОМОУШЕН`,
