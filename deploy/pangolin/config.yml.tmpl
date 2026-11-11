@@ -39,4 +39,14 @@ flags:
     enable_acme_cert_sync: false
     disable_local_sites: true
     disable_basic_wireguard_sites: true
-    disable_config_managed_domains: true
+    # Управляемые конфигом домены — ВКЛ (2026-11-11): домен из config-секции domains
+    # заводится сразу с verified=true БЕЗ DNS-валидации (в кластере её плейсхолдер
+    # «Server IP Address» проходит никогда — баг Pangolin, см. docs/drills.md).
+    disable_config_managed_domains: false
+
+# Управляемый конфигом домен: любое имя второго уровня (nov.321r.ru, komodo.321r.ru…)
+# работает сразу, без персональных записей; сертификат — один wildcard на всю зону.
+domains:
+    "321r.ru":
+        base_domain: "321r.ru"
+        prefer_wildcard_cert: true
