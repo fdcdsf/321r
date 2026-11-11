@@ -18,6 +18,8 @@ postgres:
 traefik:
     site_types: ["newt"] # в кластере поддерживаются только Pangolin Sites
     file_mode: true # Pangolin пишет yaml/сертификаты в общий с traefik каталог
+    cert_resolver: "letsencrypt" # имя резолвера traefik (DNS-01/Cloudflare) — обязательно
+    prefer_wildcard_cert: true   # один сертификат *.321r.ru на все имена второго уровня
 
 server:
     secret: "__SERVER_SECRET__"
@@ -50,3 +52,4 @@ domains:
     "321r.ru":
         base_domain: "321r.ru"
         prefer_wildcard_cert: true
+        cert_resolver: "letsencrypt"
