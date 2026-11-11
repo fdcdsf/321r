@@ -146,6 +146,36 @@ curl -sk --resolve test.<base>:443:<node-ip> https://test.<base>/   # ожида
 - HTTP-01 не работает при мульти-A (Let's Encrypt multi-VA проверяет все IP) — для
   дашборда тоже нужен DNS-01.
 
+## Устойчивость к ребутам (уроки теста «выключил все 3 сервера»)
+
+Полный ребут кластера вскрыл три вещи, которые автоматический установщик обязан закрыть:
+
+1. **`max_connections` в PostgreSQL.** Шаблон `db-add.sh` давал `max_connections=20` —
+   три пула Pangolin (по 20 соединений на ноду) мгновенно исчерпали слоты
+   (`FATAL: remaining connection slots are reserved...`) → Pangolin зависал, gerbil терял
+   маршрутизацию, стендбай не мог подключить WAL-приёмник и крашился. **Норма: 200**
+   (исправлено в `scripts/db-add.sh`).
+2. **Docker не перезапускает unhealthy-контейнеры.** Pangolin, зависший при старте без БД,
+   остаётся «жив, но мёртв» навсегда (healthcheck показывает unhealthy, рестарта нет).
+   **Решение: `scripts/unhealthy-restart.sh`** — cron каждую минуту на каждой ноде
+   перезапускает контейнеры в статусе unhealthy.
+3. **Стендбай с расхождением timeline.** После ребут-шторма кластер меняет timeline; диск
+   стендбая отстаёт → `FATAL: requested timeline N is not a child of this server's history`
+   → краш-цикл. Это **штатное лечение, не авария**: пересборка basebackup ~1 мин.
+   **Решение: `scripts/pg-rebuild-standby.sh [app]`** (запускать на больном узле; пишет
+   через VIP, сам найдёт текущего первичного; применено — a снова `streaming`).
+4. **Что выжило само:** Swarm, Mongo RS, слой БД (кроме случая 3), Komodo-стеки, все
+   Pangolin-конфиги и сертификаты (монитор пересобрал их из PostgreSQL), wildcard-домен
+   и его сертификат. Т.е. архитектура восстановления работает — нужна только автоматика
+   трёх пунктов выше.
+
+Итоговый набор cron для каждой ноды (уже стоит на стенде):
+
+```cron
+* * * * *   /usr/local/bin/unhealthy-restart.sh >>/var/log/unhealthy-restart.log 2>&1
+*/30 * * * * /usr/local/bin/pangolin-wildcard-repair.sh <node-ip> >>/var/log/wildcard-repair.log 2>&1
+```
+
 ## Что сообщить апстриму (fosrl/pangolin)
 
 1. `createOrder` добавляет `*.` к уже wildcard-домену (`*.*.base`) при

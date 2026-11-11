@@ -70,7 +70,7 @@ services:
     container_name: pg-${APP}
     restart: unless-stopped
     mem_limit: 200m
-    command: ["postgres","-c","shared_buffers=32MB","-c","max_connections=20","-c","wal_level=replica","-c","hot_standby=on","-c","archive_mode=always","-c","archive_command=cp %p /var/lib/pgwal/%f"]
+    command: ["postgres","-c","shared_buffers=32MB","-c","max_connections=200","-c","wal_level=replica","-c","hot_standby=on","-c","archive_mode=always","-c","archive_command=cp %p /var/lib/pgwal/%f"]
     env_file:
       - /etc/db/secrets/${APP}.env
     ports:
