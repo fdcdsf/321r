@@ -273,6 +273,20 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
     - подписка: `https://rem.321r.ru/api/sub/<shortUuid>` (base64 с vless-ссылками).
     Без сквада подписка честно пишет «No hosts found — Check Internal Squads tab».
 
+17. **Subscription Page (docs.rw/install/subscription-page/bundled):** отдельный сервис
+    `remnawave/subscription-page` на b (`/opt/remnawave/subscription`, 127.0.0.1:3010),
+    `REMNAWAVE_PANEL_URL=http://remnawave:3000` (docker-сеть), свой API-токен (`subpage`;
+    создание токенов — admin-only маршрут: только JWT + `X-Remnawave-Client-Type: browser`!).
+    Панель: `SUB_PUBLIC_DOMAIN=sub.321r.ru` (без схемы) + пересоздать контейнер.
+    Доступ — ресурс Pangolin `sub.321r.ru` → cluster-b → 127.0.0.1:3010.
+18. **Страница подписок «молчит» на всех путях кроме `/<shortUuid>`** (сокет глушится —
+    защита от проверяющих). HC Pangolin не умеет заголовки → двойная адаптация:
+    nginx-подкладка 127.0.0.1:3011 (добавляет X-Forwarded-*) для HC + постоянный
+    пользователь-пробник `hc-probe`, HC path = `/<shortUuid hc-probe>` (порт 3011).
+    Корень `sub.321r.ru` снаружи отдаёт 502 — НЕ ошибка, это дизайн приложения.
+19. Пользовательская ссылка: `https://sub.321r.ru/<shortUuid>` (красивая страница с QR и
+    кнопками клиентов); сырой `/api/sub/<shortUuid>` (base64) — для клиентов.
+
 **Проверено (2026-11-13):** маскировка на всех трёх нодах = 200 «321R — облачные решения»
 с настоящим LE-сертификатом своей ноды; ноды VPN online в панели (3/3); подписка testik
 выдаёт 3×(маска 443 + reality 2087). Осталось: mtproto.zig (+ egress-обход для a),
