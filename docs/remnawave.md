@@ -247,6 +247,37 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
     ОДИНАКОВЫМ на всех нодах — поэтому один config profile Xray работает на всех
     (certificateFile/keyFile = `/etc/letsencrypt/live/mask/*.pem`).
 
+11. **Ноды VPN (remnanode):** панель коннектится К НОДЕ на `NODE_PORT` (не наоборот!):
+    `POST /api/nodes` → `configProfile: {activeConfigProfileUuid, activeInbounds:[uuid,...]}`;
+    секрет ноды — `GET /api/keygen` → `SECRET_KEY` в compose; `network_mode: host`,
+    volume `/etc/letsencrypt:ro`. ⚠️ порт ноды (2099) слушает `rw-node` — ufw-правило
+    `allow from 172.16.0.0/12 to any port 2099` ОБЯЗАТЕЛЬНО (панель в контейнере ходит на
+    свой хост с docker-адреса, а не из mesh!).
+12. **Xray 26.x требует `"decryption": "none"` во ВСЕХ vless-settings** (включая reality-инбаунд) —
+    без этого «failed to build inbound handler» и краш-цикл.
+13. **Fallback шлёт расшифрованный HTTP!** nginx-заглушка слушает ПРОСТОЙ http:9447
+    (TLS терминирует сам Xray) — не ssl! (как и на xdom45: их nginx-блок без ssl_certificate).
+14. **Маскировочным именам нужны свои A-записи** `vpn-<alias>.321r.ru` → IP своей ноды
+    (не wildcard! иначе SNI vpn-b попадёт на ноду c → 404 и чужой сертификат = дыра в маске).
+    TODO автоматизация: дописать в `ddns.sh` третью запись (vpn-<alias>).
+15. **ssh без `-n` СЪЕДАЕТ stdin скрипта** (`bash -s` < file): всё после ssh-команды не
+    выполняется молча! Всегда `ssh -n` внутри скриптов. `pkill -f "строка"` убивает собственный
+    shell — маска `pkill -f "strin[g]"`.
+16. **Хосты/сквады/подписки (порядок настройки):**
+    - хост: `POST /api/hosts` `{inbound:{configProfileUuid, configProfileInboundUuid}, remark,
+      address, port:443|2087, sni, securityLayer:"DEFAULT", fingerprint:"chrome", nodes:[uuid]}` —
+      по одному хосту на ноду на инбаунд (всего 6);
+    - сквад: `POST /api/internal-squads` `{name, inbounds:[inbound-uuid,...]}`;
+    - юзер: `POST /api/users` `{username, expireAt}` (**expireAt обязателен!**) →
+      `POST /api/internal-squads/{sq}/bulk-actions/add-users {"users":["<shortUuid>"]}`;
+    - подписка: `https://rem.321r.ru/api/sub/<shortUuid>` (base64 с vless-ссылками).
+    Без сквада подписка честно пишет «No hosts found — Check Internal Squads tab».
+
+**Проверено (2026-11-13):** маскировка на всех трёх нодах = 200 «321R — облачные решения»
+с настоящим LE-сертификатом своей ноды; ноды VPN online в панели (3/3); подписка testik
+выдаёт 3×(маска 443 + reality 2087). Осталось: mtproto.zig (+ egress-обход для a),
+дриллы фазы 5/9, обновление ddns.sh, PLAN.md.
+
 **Статус на 2026-11-13:** маскировочный каркас готов на a/b/c (certbot-серты `vpn-*`+`tg.*`,
 nginx-заглушки 9447/8448, passthrough в `mask_config.yml`, ufw 2087 + 9446/8446 от docker);
 панель на b работает (rem.321r.ru = 200 со всех нод), БД — наш слой [b,c]; профиль
