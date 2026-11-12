@@ -286,11 +286,40 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
     Корень `sub.321r.ru` снаружи отдаёт 502 — НЕ ошибка, это дизайн приложения.
 19. Пользовательская ссылка: `https://sub.321r.ru/<shortUuid>` (красивая страница с QR и
     кнопками клиентов); сырой `/api/sub/<shortUuid>` (base64) — для клиентов.
+20. **404 на маске после выката (2026-11-13): причина — DNS-кэш.** Пока `vpn-*` попадали под
+    wildcard `*.321r.ru` (3 IP), резолвер клиента отдавал ЧУЖИЕ ноды → traefik без такого SNI
+    → 404. Фикс (и повышение живучести!): (а) certbot-сертификат маски = **4 SAN**
+    (vpn-a+vpn-b+vpn-c+tg, `--expand`, имя каталога прежнее, симлинк `live/mask` жив);
+    (б) в `mask_config.yml` — **три явных HostSNI-роутера** (vpn-a/b/c) на один сервис
+    `mask-vpn` → локальный Xray. Теперь ЛЮБАЯ нода обслуживает ЛЮБОЕ имя (матрица 3×3 = 200).
+    ⚠️ `HostRegexp` в traefik v3 для TCP НЕ поддерживается («unsupported function») —
+    либо явные роутеры, либо `HostSNIRegexp`. A-записи vpn-* → свои IP оставлены (балансировка).
+21. **mtproto.zig (mtbuddy v1.15.4):**
+    - установка: `mtbuddy install --config <файл ВНЕ /opt/mtproto-proxy> --no-dpi --yes`
+      (конфиг в самом каталоге установки → «are the same file»; `mtbuddy uninstall` сносит
+      И сам mtbuddy — после него заново bootstrap!);
+    - `--no-dpi` обязателен: его TCPMSS-фрагментация ClientHello сломала бы SNI-роутинг
+      нашего passthrough, nfqws не нужен — анти-DPI уже в цепочке gerbil→traefik;
+    - конфиг: порт 8446 (за passthrough), `public_ip=tg.321r.ru`, `public_port=443`,
+      `[censorship] mask=true, mask_target=127.0.0.1, mask_port=8448` (наш nginx SSL!) —
+      mtproto проксирует RAW TLS к маске; для Xray-fallback :9447 наоборот ПРОСТОЙ http
+      (Xray терминирует TLS сам) — два РАЗНЫХ режима nginx!;
+    - секрет — ОДИН на кластер (`/etc/db/secrets/mtproto.env`, multi-A) — клиенты ходят на любую ноду;
+    - ⚠️ mtbuddy открывает ufw-порт — **закрыть обратно** (маскировка требует закрытого порта!).
+22. **Egress mtproto из РФ (РКН блокирует IP Telegram):** трафик ноды a уходит через b:
+    (а) маршруты Telegram-DC на a: 91.108.4.0/22, 91.108.8.0/22, 91.108.56.0/22,
+    149.154.160.0/20 → via 10.66.0.2; (б) **главный подводный камень: AllowedIPs пира b
+    в wg0.conf на a обязаны включать эти диапазоны** — WireGuard молча не пустит пакет вне
+    AllowedIPs (маршрут есть, трафика нет — tcpdump пуст!); (в) на b: `ip_forward=1`,
+    MASQUERADE для 10.66.0.0/24, `ufw route allow in on wg0 out on <iface>` (FORWARD default
+    DROP у ufw). Persist: `tg-egress.service` (a), `mesh-egress.service` (b).
 
-**Проверено (2026-11-13):** маскировка на всех трёх нодах = 200 «321R — облачные решения»
-с настоящим LE-сертификатом своей ноды; ноды VPN online в панели (3/3); подписка testik
-выдаёт 3×(маска 443 + reality 2087). Осталось: mtproto.zig (+ egress-обход для a),
-дриллы фазы 5/9, обновление ddns.sh, PLAN.md.
+**Проверено (2026-11-13):** маскировка vpn-*/tg = 200 со всех нод (матрица 3×3), VPN-ноды 3/3,
+подписки и страница подписок работают, mtproto активен на a/b/c (маска tg = 200), egress из РФ
+через b подтверждён. Осталось: дриллы фазы 5/9, обновление ddns.sh (A-записи маски),
+PLAN.md, мелочи (2FA, пароли).
+
+
 
 **Статус на 2026-11-13:** маскировочный каркас готов на a/b/c (certbot-серты `vpn-*`+`tg.*`,
 nginx-заглушки 9447/8448, passthrough в `mask_config.yml`, ufw 2087 + 9446/8446 от docker);
