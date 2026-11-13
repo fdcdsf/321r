@@ -313,6 +313,13 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
     AllowedIPs (маршрут есть, трафика нет — tcpdump пуст!); (в) на b: `ip_forward=1`,
     MASQUERADE для 10.66.0.0/24, `ufw route allow in on wg0 out on <iface>` (FORWARD default
     DROP у ufw). Persist: `tg-egress.service` (a), `mesh-egress.service` (b).
+23. **«404 без сертификата» при открытии `vpn-a.321r.ru` БЕЗ `https://` (2026-11-13).**
+    Браузер без схемы идёт на :80, а у маскировочных имён там не было роутера → gerbil
+    отдавал 404 по чистому HTTP (о сертификате речи нет). Лечение обязательное: в
+    `mask_config.yml` — секция `http:` с роутерами `Host(...)` на entrypoint `web` →
+    `redirectScheme` (301) на https для vpn-a/b/c и tg. Проверка: `curl -s -o /dev/null -w
+    '%{http_code} %{redirect_url}' http://vpn-a.321r.ru/` → `301 https://vpn-a.321r.ru/`.
+    **Правило: каждый новый домен маскировки — сразу с http→https редиректом.**
 
 **Проверено (2026-11-13):** маскировка vpn-*/tg = 200 со всех нод (матрица 3×3), VPN-ноды 3/3,
 подписки и страница подписок работают, mtproto активен на a/b/c (маска tg = 200), egress из РФ
