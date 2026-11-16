@@ -1,9 +1,9 @@
 [Unit]
-Description=db-guard каждые 5 секунд
+Description=db-guard каждые 10 секунд
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=5s
+OnUnitActiveSec=10s
 AccuracySec=1s
 
 [Install]

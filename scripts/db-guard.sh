@@ -110,7 +110,19 @@ tcp_ok() { timeout 2 bash -c "exec 3<>/dev/tcp/$1/$2" 2>/dev/null; }
 
 cast_vote() {  # $1=app $2=0|1 — голос от МЕНЕДЖЕРА о живости первичного
   [ "$IS_MANAGER" = 1 ] || return 0
-  docker node update --label-add "vote.$1.$ME_ALIAS=$2-$(date +%s)" "$(map_swarm "$ME_ALIAS")" >/dev/null
+  local f="$STATE_DIR/vote.$1" now lastval
+  now=$(date +%s)
+  lastval="$(cat "$f" 2>/dev/null || true)"
+  # Обновляем при СМЕНЕ значения или раз в 20 с (урок 2026-11-16: docker node update
+  # каждый тик = жор Raft/докера; свежесть голоса FRESH=45 с — 20 с держит голос живым).
+  if [ "$lastval" = "$2" ] && [ -f "$f" ] && [ $(( now - $(stat -c %Y "$f" 2>/dev/null || echo 0) )) -lt 20 ]; then
+    return 0
+  fi
+  if docker node update --label-add "vote.$1.$ME_ALIAS=$2-$now" "$(map_swarm "$ME_ALIAS")" >/dev/null 2>&1; then
+    printf '%s' "$2" > "$f"
+    return 0
+  fi
+  return 1
 }
 
 count_votes() { # $1=app → DEAD_DECLARED=0|1; голоса старше 45 с не считаются
@@ -202,6 +214,17 @@ pg_recovery() { # t|f; пусто — контейнер не отвечает
   docker exec -u postgres "pg-$1" psql -U postgres -tAc 'SELECT pg_is_in_recovery()' 2>/dev/null || true
 }
 
+pg_recovery_cached() { # то же, но с кешем 10 с — для тикового чтения (не для петель promote!)
+  local cache="$STATE_DIR/pgrec.$1" out now
+  now=$(date +%s)
+  if [ -f "$cache" ] && [ $(( now - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 10 ]; then
+    cat "$cache"; return 0
+  fi
+  out="$(pg_recovery "$1")"
+  printf '%s' "$out" > "$cache"
+  printf '%s' "$out"
+}
+
 promote_pg() { # $1=app
   local app="$1" i
   docker exec -u postgres "pg-$app" pg_ctl promote >/dev/null 2>&1 || return 1
@@ -209,6 +232,7 @@ promote_pg() { # $1=app
     if [ "$(pg_recovery "$app")" = f ]; then
       # закрепляем переход: без standby.signal рестарт останется первичным
       rm -f "/var/lib/dbdata/pg-$app/standby.signal"
+      rm -f "$STATE_DIR/pgrec.$app"
       return 0
     fi
     sleep 1
@@ -227,7 +251,7 @@ pg_become_standby() { # $1=app $2=ip первичного: переписать 
   touch "$dir/standby.signal"
   docker restart "pg-$app" >/dev/null
   for i in $(seq 1 15); do
-    [ "$(pg_recovery "$app")" = t ] && return 0
+    [ "$(pg_recovery "$app")" = t ] && { rm -f "$STATE_DIR/pgrec.$app"; return 0; }
     sleep 1
   done
   return 1
@@ -275,13 +299,29 @@ mongosh_eval() { # $1=app $2=js (всегда статус 0: пусто = дв�
   docker exec "mongod-$1" mongosh --quiet --eval "$2" 2>/dev/null || true
 }
 
+# Один старт mongosh на тик + кеш 15 с (урок 2026-11-16: mongosh = Node.js со стартом
+# ~1–2 с CPU; при тике 5 с и паре проверок это давало load 4–5 на 1-ядерных нодах).
+mongo_probe() { # $1=app → "myState|nPrimaries" ("|": контейнер не отвечает)
+  local cache="/run/db-guard-$1.mongo" out now
+  now=$(date +%s)
+  if [ -f "$cache" ] && [ $(( now - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 15 ]; then
+    cat "$cache"; return 0
+  fi
+  out="$(mongosh_eval "$1" 'try { var s = rs.status(); print(s.myState + "|" + s.members.filter(function (m) { return m.stateStr === "PRIMARY" }).length) } catch (e) { print("-1|-1") }')"
+  [ -n "$out" ] || out="|"
+  printf '%s' "$out" > "$cache"
+  printf '%s' "$out"
+}
+
 mongo_state() { # myState (1/2/3), -1 = RS не поднят, "" = контейнер не отвечает
-  mongosh_eval "$1" 'try { print(rs.status().myState) } catch (e) { print(-1) }'
+  mongo_probe "$1" | cut -d'|' -f1
 }
 
 mongo_primaries() { # сколько участников PRIMARY; ошибка → -1
-  mongosh_eval "$1" 'try { print(rs.status().members.filter(function (m) { return m.stateStr === "PRIMARY" }).length) } catch (e) { print(-1) }'
+  mongo_probe "$1" | cut -d'|' -f2
 }
+
+mongo_probe_invalidate() { rm -f "/run/db-guard-$1.mongo"; }
 
 mongo_reconfig_pri() { # $1=app $2=host с priority 1; $3=1 → force (когда первичного нет)
   local opts='{}' js
@@ -335,7 +375,7 @@ for REG in /etc/db/apps.d/*.yaml; do
   count_votes "$APP"
 
   if [ "$ENGINE" = pg ]; then
-    rec="$(pg_recovery "$APP")"
+    rec="$(pg_recovery_cached "$APP")"
     [ -d "/var/lib/dbdata/pg-$APP" ] && watch_instance "$APP" "$rec" "pg-$APP"
 
     # --- назначение: объявлен мёртвым, я — следующий по цепи ---
@@ -430,13 +470,19 @@ for REG in /etc/db/apps.d/*.yaml; do
     if [ "$mst" = 1 ]; then
       # я — первичный RS
       if [ "$designated" = "$ME_ALIAS" ]; then
-        # я и назначенный: выровнять priority (1 — мне, 0 — остальным, арбитры не трогаем)
-        out="$(mongo_reconfig_pri "$APP" "$MY_HOST" 0)"
-        case "$out" in *err*) log "$APP: rs.reconfig: $out" ;; esac
+        # я и назначенный: выровнять priority (1 — мне, 0 — остальным, арбитры не трогаем).
+        # Достаточно раз в 60 с: каждый запуск = старт mongosh, а тик у нас 5 с.
+        stamp="/run/db-guard-$APP.pri"
+        if [ ! -f "$stamp" ] || [ $(( $(date +%s) - $(stat -c %Y "$stamp") )) -ge 60 ]; then
+          touch "$stamp"
+          out="$(mongo_reconfig_pri "$APP" "$MY_HOST" 0)"
+          case "$out" in *err*) log "$APP: rs.reconfig: $out" ;; esac
+        fi
       elif [ -n "$D_HOST" ] && tcp_ok "$D_IP" "$PORT"; then
         # первичный не назначенный: уступаю — выровнять priority, затем выборы RS
         mongo_reconfig_pri "$APP" "$D_HOST" 0 >/dev/null || true
         mongo_stepdown "$APP" >/dev/null || true
+        mongo_probe_invalidate "$APP"
         log "$APP: НЕНАЗНАЧЕННЫЙ первичный $ME_ALIAS уступил (метка → $designated)"
       fi
     elif [ "$mst" = 2 ] && [ "$designated" = "$ME_ALIAS" ] && [ "$inS" = 1 ]; then
@@ -445,8 +491,10 @@ for REG in /etc/db/apps.d/*.yaml; do
         claim "$APP" "$ME_ALIAS" || true
         out="$(mongo_reconfig_pri "$APP" "$MY_HOST" 1)"
         case "$out" in *err*) log "$APP: force-reconfig: $out" ;; esac
+        mongo_probe_invalidate "$APP"
         for i in $(seq 1 15); do
-          if [ "$(mongo_state "$APP")" = 1 ]; then
+          st="$(mongosh_eval "$APP" 'try { print(rs.status().myState) } catch (e) { print(-1) }')"
+          if [ "$st" = 1 ]; then
             log "$APP: ПРОМОУШЕН — RS назначил $ME_ALIAS первичным"
             break
           fi
