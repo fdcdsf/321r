@@ -38,6 +38,11 @@ LAST_FILE="$STATE_DIR/last_ip"
 IP="$(curl -4 -fsS --max-time 10 https://api.ipify.org 2>/dev/null \
    || curl -4 -fsS --max-time 10 https://ifconfig.me/ip 2>/dev/null \
    || curl -4 -fsS --max-time 10 'http://ip-api.com/line/?fields=query' 2>/dev/null || true)"
+# Фолбэк: IP интерфейса (урок 2026-11-16: все три внешних сервиса стали недоступны,
+# ddns молча перестал обновлять записи). Подходят VPS с публичным IP на интерфейсе;
+# docker-подсети (10/172.16-31) отфильтрованы.
+[[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+  IP="$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | grep -vE '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)' | head -1)"
 [[ "$IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ddns: не удалось узнать свой IP" >&2; exit 1; }
 
 LAST="$(cat "$LAST_FILE" 2>/dev/null || true)"

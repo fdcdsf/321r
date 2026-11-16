@@ -112,7 +112,13 @@ volume `/etc/letsencrypt:/etc/letsencrypt:ro`, env: адрес панели + с
   `mask_target = 127.0.0.1`, `mask_port = 8448` → nginx-заглушка (тот же HTML, что у VPN);
 - **secret ОДИН на кластер** (клиенты ходят на любую ноду через multi-A — генерит установщик,
   хранит в `/etc/db/secrets/mtproto.env`, в чат/логи не попадает);
-- systemd `mtproto-proxy`; ссылка для Telegram: `tg://proxy?server=321r.ru&port=443&secret=...`.
+- systemd `mtproto-proxy`; ссылка для Telegram: `tg://proxy?server=tg.321r.ru&port=443&secret=...`
+  (ФАКТ 2026-11-16: `mtbuddy links` выдаёт именно server=tg.321r.ru, port=443);
+- **ufw: 8446 ТОЛЬКО от docker-подсети traefik!** mtbuddy при установке добавляет
+  `8446/tcp ALLOW Anywhere` — это светит маску отдельным портом; правило убирать
+  (`ufw delete allow 8446/tcp`), см. грабли/симптомы в V1/14;
+- конфиг лежит в `/opt/mtproto-proxy/config.toml` (факт). Риск: `mtbuddy uninstall` сносит
+  весь каталог вместе с секретами — перед удалением mtbuddy конфиг выгружать;
 - **WARP-туннель НЕ нужен**: на старом сервере хостер резал egress к IP Telegram (свой косяк
   конкретного хостера); наших хостеров это не касается (проверить при раскатке:
   `curl --connect-timeout 5 https://149.154.167.51:443` с каждой ноды). Если какой-то хостер
@@ -215,9 +221,11 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
 
 1. **Панель Remnawave v3.4.10 — на PostgreSQL (не MongoDB!)** и тянет штатный compose
    со своим postgres + valkey. Наше решение: **встроенный postgres ВЫКИНУТ**, панель ходит в
-   НАШ слой БД: `apps.d/remnawave.yaml` (pg, class cluster, placement [b,c], primary b,
+   НАШ слой БД: `apps.d/remnawave.yaml` (pg, class cluster, placement [b,c], primary b (стартовый),
    **port 5433**) → `db-add remnawave` → standby на c (streaming подтверждён), VIP-прокси,
    метки. Compose наш: `remnawave` + `remnawave-redis` (valkey, unix-socket).
+   ФАКТ 2026-11-16: текущий первичный — **c** (метка `db-primary-remnawave=c`, standby b) —
+   db-guard перенёс назначение; поле `primary:` в yaml — только бутстрап.
 2. **Порты панели:** `127.0.0.1:3000:3000` (сама) и `127.0.0.1:3002:3001` (metrics).
    ⚠️ **3001 на хосте занят Uptime Kuma** (swarm-ingress на всех нодах) — metrics-маппинг
    обязателен на другой порт! Healthcheck панели: `GET :3001/health` внутри контейнера.
