@@ -226,6 +226,9 @@ dynamic_config уже вставлен?). Выборы (панель/mtproto) �
    метки. Compose наш: `remnawave` + `remnawave-redis` (valkey, unix-socket).
    ФАКТ 2026-11-16: текущий первичный — **c** (метка `db-primary-remnawave=c`, standby b) —
    db-guard перенёс назначение; поле `primary:` в yaml — только бутстрап.
+   **Лимиты памяти в compose обязательны** (бюджет — V1/20): `remnawave` —
+   `NODE_OPTIONS=--max-old-space-size=320` (из коробки стоит 16384!) + `mem_limit: 640m`;
+   subscription-page — heap 128 + `mem_limit: 256m` (142→95 МБ).
 2. **Порты панели:** `127.0.0.1:3000:3000` (сама) и `127.0.0.1:3002:3001` (metrics).
    ⚠️ **3001 на хосте занят Uptime Kuma** (swarm-ingress на всех нодах) — metrics-маппинг
    обязателен на другой порт! Healthcheck панели: `GET :3001/health` внутри контейнера.
