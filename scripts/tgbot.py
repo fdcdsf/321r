@@ -23,7 +23,14 @@ env = load_env(ENV)
 TOKEN = env["TG_BOT_TOKEN"]
 ALLOWED = {s.strip() for s in env.get("TG_CHAT_ID", "").split(",") if s.strip()}
 API = "https://api.telegram.org/bot" + TOKEN
-NODE = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip().split(".")[0]
+# Профиль ноды (a/b/c) — из nodes.map; fallback — короткое hostname
+NODE = (subprocess.run("awk -v s=$(hostname) '$3==s{print $1}' /etc/db/nodes.map",
+                       shell=True, capture_output=True, text=True).stdout.strip()
+        or subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip().split(".")[0])
+
+
+def log(msg):
+    print(msg, flush=True)  # уходит в journald (stdout сервиса)
 
 
 def call(method, timeout=60, **params):
@@ -36,8 +43,8 @@ def call(method, timeout=60, **params):
 def send(chat_id, text):
     try:
         call("sendMessage", chat_id=chat_id, text=text)
-    except Exception:
-        pass
+    except Exception as e:
+        log("tgbot: ошибка отправки: %s" % e)
 
 
 def sh(cmd, timeout=15):
@@ -90,6 +97,7 @@ def cmd_status(chat_id):
 
 
 def handle(chat_id, text):
+    log("tgbot: команда %r от %s" % (text, chat_id))
     cmd = text.split()[0].split("@")[0].lstrip("/") if text else ""
     if cmd in ("start", "help"):
         send(chat_id, "321r бот управления.\nКоманды:\n/status — статус кластера\n/ping — проверка связи")
@@ -103,6 +111,7 @@ def handle(chat_id, text):
 
 def main():
     offset = 0
+    log("tgbot: старт на ноде " + NODE)
     try:
         call("sendMessage", chat_id=next(iter(ALLOWED)), text="321r · бот запущен на ноде " + NODE)
     except Exception:
