@@ -30,7 +30,14 @@ exec 9>"$STATE_DIR/lock"
 flock -n 9 || exit 0        # предыдущий тик ещё работает — пропускаем
 
 SSHOPTS=(-p 2222 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=3)
-log() { logger -t db-guard -- "$*"; }
+log() {
+  logger -t db-guard -- "$*"
+  # Алерт в Telegram (V1/21 §3): в фоне, тихо — никогда не тормозим тик и не ломаем вызов
+  if [ -x /usr/local/bin/tg-alert.sh ]; then
+    (/usr/local/bin/tg-alert.sh "db-guard: $*" >/dev/null 2>&1 &)
+  fi
+  return 0
+}
 now=$(date +%s)
 
 # ---------- nodes.map ----------

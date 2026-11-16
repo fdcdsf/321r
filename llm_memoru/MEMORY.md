@@ -282,3 +282,8 @@ N ≥ 3 любых серверов; текущий стенд a/b/c — при�
 - Профиль M (панель×1 + gerbil по mesh): gerbil УМЕЕТ искать конфиг по mesh, но панель слушает
   только 127.0.0.1 — ТЗ инсталлятору в docs/drills.md. Восстановление: сначала панель, потом gerbil.
 - **Следующая фаза 8**: failover панели Remnawave (swarm) → бэкапы (restic/дампы/WAL) → Kuma+Telegram.
+- **2026-11-16 (вечер): фаза 8 ПОШЛА.** 8.1 `cluster.yml` + `cluster.sh status|apply` ✓;
+  8.2 Telegram-бот **@server321r_bot** v1 ✓ (stdlib, ~30 МБ; команды /status /ping;
+  tg-alert.sh — алерты с любой ноды; db-guard шлёт события; whitelist chat_id владельца;
+  секреты в /etc/db/secrets/telegram.env — НЕ в git!). Бот на control-ноде (cluster.yml `control:`).
+  Далее 8.3 бэкапы 3-2-1 (restic), 8.4 верификация, 8.5 аварийный режим по кнопке, 8.6 app move.
