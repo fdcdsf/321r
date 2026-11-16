@@ -139,16 +139,19 @@ EOF
 }
 
 gen_mongo_compose() { # $1 = alias узла
-  local b rs=""
+  local b rs="" mem="512m"
   if [ "$CLASS" = local ]; then b=10.66.0.99; else b="$(map_ip "$1")"; fi
   [ "$CLASS" = cluster ] && rs=",\"--replSet\",\"rs_${APP}\""
+  # Арбитру — лимит 300m (данных не хранит). КЭШ НЕ УЖИМАТЬ: mongo не принимает
+  # wiredTigerCacheSizeGB < 0.25 (BadValue при старте, проверено 2026-11-16).
+  if [ -n "$ARB" ] && [ "$1" = "$ARB" ]; then mem="300m"; fi
   cat <<EOF
 services:
   db:
     image: mongo:7
     container_name: mongod-${APP}
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: ${mem}
     command: ["mongod","--bind_ip_all","--wiredTigerCacheSizeGB","0.256"${rs}]
     ports:
       - "${b}:${PORT}:27017"
