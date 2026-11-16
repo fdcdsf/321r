@@ -20,13 +20,24 @@ ERRS=""
 ls -1dt "$STAGE"/*/ "$STAGE"/*.gz 2>/dev/null | tail -n +3 | xargs -r rm -rf
 
 # --- 1) PostgreSQL: согласованный basebackup каждого локального инстанса ---
+# ИСТОЧНИК — ТЕКУЩИЙ ПЕРВИЧНЫЙ (через VIP), не локальный инстанс! Урок 2026-11-16:
+# basebackup со СТЕНДБАЯ даёт неполный набор WAL (стендбай не генерирует записи;
+# redo-указатель рестарт-поинта смотрит в отсутствующий сегмент) — восстановление
+# «must specify restore_command». С первичного WAL полный и самодостаточный.
+# Пути: в контейнере /var/lib/pgwal УЖЕ каталог приложения (хост /var/lib/pgwal/<app>).
 for d in /var/lib/dbdata/pg-*; do
   app="${d##*/pg-}"; [ -d "$d" ] || continue
-  if docker exec -u postgres "pg-$app" pg_basebackup -D "/var/lib/pgwal/$app/bb-$STAMP" -Ft -Xs -z >/dev/null 2>&1; then
+  port="$(sed -n 's/^port: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
+  if docker exec -u postgres "pg-$app" sh -c \
+      "PGPASSWORD=\$REPL_PASSWORD pg_basebackup -h 10.66.0.99 -p ${port:-5432} -U replicator -D /var/lib/pgwal/bb-$STAMP -Ft -Xs -z" >/dev/null 2>&1; then
     mkdir -p "$STAGE/pg-$app-$STAMP"
-    cp "/var/lib/pgwal/$app/bb-$STAMP"/*.gz "$STAGE/pg-$app-$STAMP/" 2>/dev/null
+    cp /var/lib/pgwal/"$app"/bb-"$STAMP"/*.gz "$STAGE/pg-$app-$STAMP/" 2>/dev/null
     rm -rf "/var/lib/pgwal/$app/bb-$STAMP"
-    log "pg-$app: basebackup ок"
+    if [ -n "$(ls -A "$STAGE/pg-$app-$STAMP" 2>/dev/null)" ]; then
+      log "pg-$app: basebackup ок с первичного ($(du -sh "$STAGE/pg-$app-$STAMP" | cut -f1))"
+    else
+      ERRS="$ERRS pg-$app-copy"
+    fi
   else
     ERRS="$ERRS pg-$app-basebackup"
   fi

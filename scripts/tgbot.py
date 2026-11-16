@@ -73,7 +73,9 @@ REMOTE = (
     "free -m | awk '/Mem:/{print $7 \"MB свободно\"}'; "
     "docker ps --filter status=running -q | wc -l | sed 's/$/ контейнеров/'; "
     "docker exec -u postgres pg-pangolin psql -U postgres -tAc "
-    "\"SELECT CASE WHEN pg_is_in_recovery() THEN 'pg:standby' ELSE 'pg:PRIMARY' END\" 2>/dev/null || echo 'pg:-'"
+    "\"SELECT CASE WHEN pg_is_in_recovery() THEN 'pg:standby' ELSE 'pg:PRIMARY' END\" 2>/dev/null || echo 'pg:-'; "
+    "test -f /var/lib/pgbackup/last_ok && echo \"бэкап $(( ($(date +%s) - $(stat -c %Y /var/lib/pgbackup/last_ok)) / 3600 ))ч назад\" "
+    "|| echo 'бэкап: НИКОГДА'"
 )
 
 
@@ -100,11 +102,17 @@ def handle(chat_id, text):
     log("tgbot: команда %r от %s" % (text, chat_id))
     cmd = text.split()[0].split("@")[0].lstrip("/") if text else ""
     if cmd in ("start", "help"):
-        send(chat_id, "321r бот управления.\nКоманды:\n/status — статус кластера\n/ping — проверка связи")
+        send(chat_id, "321r бот управления.\nКоманды:\n/status — статус кластера\n"
+                      "/export — выгрузить бэкапы на физический носитель\n/ping — проверка связи")
     elif cmd == "ping":
         send(chat_id, "pong · нода " + NODE)
     elif cmd == "status":
         cmd_status(chat_id)
+    elif cmd == "export":
+        send(chat_id, "Запускаю выгрузку бэкапов со всех нод — файлы придут сюда, сохраните на диск.")
+        for name, ip in cluster_nodes():
+            sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'nohup /usr/local/bin/tg-export.sh >/dev/null 2>&1 &'" % ip, timeout=10)
+        log("tgbot: выгрузка запущена на всех нодах")
     elif cmd:
         send(chat_id, "Неизвестная команда. /help")
 

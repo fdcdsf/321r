@@ -202,6 +202,19 @@ wg show | grep -E 'peer|latest handshake'
   Причина: gerbil без конфига панели не даёт маппинги, а traefik живёт в netns gerbil.
   Порядок восстановления: **сначала здоровая панель, потом gerbil/traefik**
   (`docker compose up -d --no-deps --force-recreate gerbil traefik` — вместе, см. 08).
+- **Симптомы восстановления PG из basebackup (уроки 8.4, 2026-11-16 — все пойманы верификацией!):**
+  1) «бэкап проходил, но в нём нет данных» — пути контейнера и хоста различаются
+     (`/var/lib/pgwal` в контейнере УЖЕ каталог приложения): проверять, что `cp` скопировал
+     непустой набор;
+  2) **basebackup со СТЕНДБАЯ даёт неполный WAL** (стендбай не генерирует записи) —
+     восстановление упирается в `must specify "restore_command"`; брать basebackup
+     **с первичного через VIP**;
+  3) `pg_wal.tar.gz` распаковывать **в `pg_wal/`** (сегменты в архиве лежат без префикса пути);
+  4) копия стендбая содержит `standby.signal` — убрать, добавить `recovery.signal`;
+  5) `recovery_target='immediate'` требует `restore_command='false'` («архив пуст») — иначе
+     PG не может решить, «раннейшая» ли это точка;
+  6) PG отказывается стартовать с `max_connections` меньше, чем в контрольном файле
+     первичного — запускать scratch с продовыми `-c max_connections=200`.
 - **Симптом: `mongod` входит в crash-loop, в логе «Error during global initialization …
   BadValue … cacheSizeGB».** Причина: **MongoDB не принимает `wiredTigerCacheSizeGB` меньше
   0.25** — попытка ужать кэш арбитра до 0.1 кладёт контейнер. Лечение: вернуть 0.256;
