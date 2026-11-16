@@ -190,6 +190,18 @@ wg show | grep -E 'peer|latest handshake'
   `ufw status | grep 8446` — правило `8446/tcp ALLOW Anywhere` быть НЕ должно
   (должно быть только `8446 ALLOW 172.16.0.0/12`). Лечение: `ufw delete allow 8446/tcp`
   (сделано на стенде 2026-11-16; mtbuddy после переустановки может добавить снова — проверять!).
+- **Симптом: правило файрвола «не работает» — блок в DOCKER-USER не матчится.**
+  Причина 2026-11-16: DNAT на PREROUTING **переписывает порт на контейнерный** (host 443 →
+  контейнер 8443) ДО цепочки DOCKER-USER — правило `DROP dpt:443` не увидит ни одного пакета.
+  Правило: docker-порты блокировать по КОНТЕЙНЕРНОМУ порту в DOCKER-USER (443→8443, 80→80),
+  host-порты без маппинга (2087, 8446, 2099) — через INPUT. Проверять всегда по счётчикам:
+  `iptables -L DOCKER-USER -v -n` (pkts должны расти).
+- **Симптом: `ufw delete <правило>` удалил НЕ ТО правило** (по спеке с портом матчится
+  не только action). Удалять только по номеру: `ufw status numbered` → `ufw delete N`.
+- **Симптом: ingress ноды мёртв после пересоздания gerbil (даже tg-маска не отвечает).**
+  Причина: gerbil без конфига панели не даёт маппинги, а traefik живёт в netns gerbil.
+  Порядок восстановления: **сначала здоровая панель, потом gerbil/traefik**
+  (`docker compose up -d --no-deps --force-recreate gerbil traefik` — вместе, см. 08).
 - **Симптом: `mongod` входит в crash-loop, в логе «Error during global initialization …
   BadValue … cacheSizeGB».** Причина: **MongoDB не принимает `wiredTigerCacheSizeGB` меньше
   0.25** — попытка ужать кэш арбитра до 0.1 кладёт контейнер. Лечение: вернуть 0.256;
