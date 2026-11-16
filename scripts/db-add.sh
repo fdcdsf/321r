@@ -69,7 +69,7 @@ services:
     image: postgres:17-alpine
     container_name: pg-${APP}
     restart: unless-stopped
-    mem_limit: 200m
+    mem_limit: 512m
     command: ["postgres","-c","shared_buffers=32MB","-c","max_connections=200","-c","wal_level=replica","-c","hot_standby=on","-c","archive_mode=always","-c","archive_command=cp %p /var/lib/pgwal/%f"]
     env_file:
       - /etc/db/secrets/${APP}.env
@@ -98,6 +98,9 @@ q "SELECT 1 FROM pg_roles WHERE rolname='@APP@'" | grep -q '^1$' || \
   q "CREATE ROLE @APP@ WITH LOGIN PASSWORD '${APP_PASSWORD}'"
 q "SELECT 1 FROM pg_database WHERE datname='@APP@'" | grep -q '^1$' || \
   q "CREATE DATABASE @APP@ OWNER @APP@"
+# JIT гасим: сложные запросы панелей с JIT на слабых нодах деградируют в 10+ секунд
+# (урок 2026-11-16: план с битой статистикой + JIT = таймауты 57014 и пустые списки UI)
+q "ALTER DATABASE @APP@ SET jit = off"
 # скрипт бежит на хосте: hba-файл лежит в хост-каталоге тома (там смонтирован PGDATA)
 HBA=/var/lib/dbdata/pg-@APP@/pg_hba.conf
 grep -q '10.66.0.0/24' "$HBA" || cat >> "$HBA" <<'HBA'
