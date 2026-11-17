@@ -80,43 +80,39 @@ def btn(text, data):
     return {"text": text, "callback_data": data}
 
 
-# ---------------- реестр приложений (карточки в боте) ----------------
-APPS = {
-    "pangolin": {
-        "title": "🧩 Pangolin — кластер туннелей",
-        "desc": "Ингресс 443 (gerbil), дашборд, сайты-агенты, ресурсы",
-        "urls": ["https://pangolin.321r.ru/"],
-        "db": "pangolin",
-        "ct": [("pangolin", "панель"), ("pg-pangolin", "БД postgres"), ("gerbil", "вход 443"), ("traefik", "роутинг")],
-        "units": [("pangolin-site", "агент сайта")],
-    },
-    "remnawave": {
-        "title": "🧩 Remnawave — VPN и маскировка",
-        "desc": "Панель VPN, подписки, Xray-ноды, маски vpn-*/tg, Reality :2087",
-        "urls": ["https://rem.321r.ru/", "https://vpn-a.321r.ru/", "https://vpn-b.321r.ru/",
-                 "https://vpn-c.321r.ru/", "https://tg.321r.ru/"],
-        "db": "remnawave",
-        "ct": [("remnawave", "панель"), ("remnawave-subscription-page", "страница подписок"),
-               ("pg-remnawave", "БД postgres"), ("remnanode", "xray-нода")],
-        "units": [],
-    },
-    "komodo": {
-        "title": "🧩 Komodo — управление стеками",
-        "desc": "Core (swarm), агенты periphery, БД mongo (RS + арбитр)",
-        "urls": ["https://komodo.321r.ru/"],
-        "db": "komodo",
-        "ct": [("mongod-komodo", "БД mongo")],
-        "units": [("periphery", "агент")],
-    },
-    "mtproto": {
-        "title": "🧩 Telegram-прокси (mtproto)",
-        "desc": "Маска tg.321r.ru; egress из РФ — через mesh-шлюз на b",
-        "urls": ["https://tg.321r.ru/"],
-        "db": None,
-        "ct": [],
-        "units": [("mtproto-proxy", "прокси")],
-    },
-}
+# ---------------- карточки приложений: ЧИТАЮТСЯ из /etc/db/bot-apps.yml (правится руками) ----------------
+# Всё живое бот открывает и без карточек (docker ps / service ls / dbdata / cluster.yml);
+# карточки — только группировка. Файл перечитывается при каждом показе.
+def load_cards():
+    cards = {}
+    try:
+        text = open("/etc/db/bot-apps.yml", encoding="utf-8").read()
+    except FileNotFoundError:
+        return cards
+    for block in re.split(r"\n\s*- id:", text)[1:]:
+        lines = block.splitlines()
+        cid = lines[0].strip()
+        c = {"title": cid, "desc": "", "urls": [], "db": None, "ct": [], "units": []}
+        for line in lines[1:]:
+            m = re.match(r"\s*(\w+):\s*(.*)$", line)
+            if not m:
+                continue
+            k, v = m.group(1), m.group(2).split("#")[0].strip()
+            if k in ("urls", "containers", "units"):
+                items = [x.strip() for x in v.split(",") if x.strip()]
+                if k == "containers":
+                    c["ct"] = [(x, x) for x in items]
+                else:
+                    c[k] = items
+            elif k == "db":
+                c["db"] = v or None
+            elif v:
+                c[k] = v
+        cards[cid] = c
+    return cards
+
+
+APPS = load_cards()
 
 
 def grid(rows):
@@ -130,10 +126,10 @@ BACK = ("◀ В меню", "m:main")
 def scr_main():
     return ("321r · панель кластера\nНажимайте разделы — экран обновляется на месте.",
             grid([[("📊 Статус", "m:status"), ("🟢 Сервисы", "m:services")],
-                  [("🧩 Приложения", "m:apps"), ("💾 Бэкапы", "m:backup")],
-                  [("🗄 Базы данных", "m:db"), ("🖥 Серверы", "m:srv")],
-                  [("📜 Логи", "m:logs"), ("⚙ Действия", "m:act")],
-                  [("ℹ Помощь", "m:help")]]))
+                  [("🧩 Приложения", "m:apps"), ("📦 Контейнеры", "m:ctop")],
+                  [("💾 Бэкапы", "m:backup"), ("🗄 Базы данных", "m:db")],
+                  [("🖥 Серверы", "m:srv"), ("📜 Логи", "m:logs")],
+                  [("⚙ Действия", "m:act"), ("ℹ Помощь", "m:help")]]))
 
 
 def scr_status(_=""):
@@ -204,11 +200,11 @@ def scr_ct(arg):
     ip = node_ip(arg)
     cts = containers_on(arg, ip)
     rows = []
-    for i in range(0, min(len(cts), 12), 2):
-        rows.append([(cts[i], "ask:restart:" + arg + ":" + cts[i])] +
-                    ([(cts[i + 1], "ask:restart:" + arg + ":" + cts[i + 1])] if i + 1 < len(cts) else []))
+    for i in range(0, min(len(cts), 14), 2):
+        rows.append([(cts[i], "m:ci:" + arg + ":" + cts[i])] +
+                    ([(cts[i + 1], "m:ci:" + arg + ":" + cts[i + 1])] if i + 1 < len(cts) else []))
     rows.append([("◀ Назад", "m:srv:" + arg)])
-    return ("📦 Контейнеры на %s — нажмите для перезапуска:" % arg, grid(rows))
+    return ("📦 Контейнеры на %s (живой список) — выберите:" % arg, grid(rows))
 
 
 def scr_logs(_=""):
@@ -276,15 +272,16 @@ def scr_ask(arg):
 def scr_help(_=""):
     return ("ℹ 321r · панель кластера\n\n"
             "📊 Статус — load/RAM/диски/роли БД/бэкапы по всем нодам\n"
-            "🟢 Сервисы — внешние точки (панели, маски) и локальные проверки\n"
-            "🧩 Приложения — карточки Pangolin / Remnawave / Komodo / mtproto:\n"
-            "   где живёт, здоровье, роли БД, компоненты, логи и перезапуск\n"
+            "🟢 Сервисы — внешние точки и локальные проверки\n"
+            "🧩 Приложения — карточки-группы (панель/ноды раздельно)\n"
+            "📦 Контейнеры — ВСЁ живое: контейнеры, swarm-сервисы (авто!)\n"
             "💾 Бэкапы — правило 3-2-1: снимки, верификация, выгрузка\n"
-            "🖥 Серверы — подробности по каждой ноде, контейнеры\n"
-            "📜 Логи — последние события любого сервиса\n"
-            "⚙ Действия — бэкап/верификация/выгрузка/аварийный режим\n\n"
-            "Алерты (фейловеры, бэкапы, дозор) приходят сюда сами.\n"
-            "Текстовые команды тоже работают: /status /backup /logs и т.д.",
+            "🖥 Серверы · 📜 Логи · ⚙ Действия\n\n"
+            "Всё живое видно автоматически: новые контейнеры, swarm-сервисы,\n"
+            "базы и ноды появятся сами. Карточки приложений — группировка из\n"
+            "/etc/db/bot-apps.yml (правится руками, подхватывается сразу).\n"
+            "Новая нода — в cluster.yml → cluster apply.\n"
+            "Алерты приходят сюда сами. Текстовые команды тоже работают.",
             grid([[BACK]]))
 
 
@@ -443,8 +440,59 @@ SCREENS = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_service
            "m:act": scr_act, "m:help": scr_help, "m:apps": scr_apps}
 
 
+def scr_ctop(_=""):
+    """Живой инвентарь: контейнеры и swarm-сервисы — ВСЁ, что есть прямо сейчас."""
+    lines = ["📦 Контейнеры и сервисы (живой инвентарь)", ""]
+    for name, ip in cluster_nodes():
+        cts = containers_on(name, ip)
+        lines.append("【%s】 %d контейнеров: %s" % (name, len(cts), ", ".join(cts[:8]) + ("…" if len(cts) > 8 else "")))
+    swarm = sh("docker service ls --format '{{.Name}} · реплик {{.Replicas}} · {{.Image}}' 2>/dev/null", timeout=15)
+    lines.append("")
+    lines.append("Swarm-сервисы:")
+    lines.append(swarm if swarm else "  (нет)")
+    lines.append("")
+    lines.append("Новое (контейнер/сервис/база) появляется здесь автоматически.")
+    rows = [[(n, "m:ct:" + n) for n, _ in cluster_nodes()]]
+    rows.append([("⚙ Только swarm-сервисы", "m:swarm")])
+    rows.append([("🔄 Обновить", "m:ctop"), BACK])
+    return ("\n".join(lines)[:3900], grid(rows))
+
+
+def scr_swarm(_=""):
+    out = sh("docker service ls --format '{{.Name}}|{{.Replicas}}|{{.Image}}' 2>/dev/null", timeout=15)
+    lines = ["⚙ Swarm-сервисы (live):", ""]
+    for ln in out.splitlines():
+        parts = ln.split("|")
+        if len(parts) == 3:
+            lines.append("  %s — реплик %s — %s" % (parts[0], parts[1], parts[2]))
+    if not out:
+        lines.append("  (сервисов нет)")
+    lines.append("")
+    lines.append("Подробности: docker service ps — по запросу в /logs.")
+    return ("\n".join(lines)[:3900],
+            grid([[("🔄 Обновить", "m:swarm")], [("◀ Назад", "m:ctop")]]))
+
+
+def scr_ci(arg):
+    """Карточка одного контейнера: логи / перезапуск."""
+    node, ct = arg.split(":", 1)
+    st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (node_ip(node), shlex.quote(ct)), timeout=10)
+    return ("📦 Контейнер «%s» на %s — состояние: %s" % (ct, node, st or "нет данных"),
+            grid([[("📜 Логи", "m:lt:" + arg)],
+                  [("🔄 Перезапустить", "ask:restart:" + arg)],
+                  [("◀ Назад", "m:ct:" + node)]]))
+
+
 def render(data):
-    """callback_data → (текст, кнопки)."""
+    """callback_data → (текст, кнопки). Карточки перечитываются — правки bot-apps.yml видны сразу."""
+    global APPS
+    APPS = load_cards()
+    if data.startswith("m:ctop"):
+        return scr_ctop()
+    if data.startswith("m:swarm"):
+        return scr_swarm()
+    if data.startswith("m:ci:"):
+        return scr_ci(data[5:])
     if data.startswith("m:instm:"):
         return scr_instm(data[8:])
     if data.startswith("m:instd:"):
