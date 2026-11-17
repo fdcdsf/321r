@@ -261,6 +261,15 @@ def scr_ask(arg):
     if arg.startswith("restart:"):
         _, n, c = arg.split(":", 2)
         t = "Перезапустить контейнер «%s» на ноде %s?" % (c, n)
+    elif arg.startswith("member-add:"):
+        _, app, n = arg.split(":", 2)
+        t = "Добавить инстанс БД «%s» на ноду %s?\n(копия данных через VIP, ~1 мин; placement расширится)" % (app, n)
+    elif arg.startswith("member-remove:"):
+        _, app, n = arg.split(":", 2)
+        t = "Убрать инстанс БД «%s» с ноды %s?\n(данные останутся на диске; первичный убрать нельзя)" % (app, n)
+    elif arg.startswith("move:"):
+        _, app, f, to = arg.split(":", 3)
+        t = "Перенести инстанс БД «%s» с %s на %s?\n(даунтайм ~10–20 с; при переносе первичного — плановый фейловер)" % (app, f, to)
     return (t, grid([[("✅ Да, выполнить", "do:" + arg)], [("❌ Отмена", "m:main")]]))
 
 
@@ -318,8 +327,74 @@ def scr_app(arg):
         lines.append("【%s】%s%s" % (name, (" " + db) if db else "", (" · " + comp) if comp else ""))
     return ("\n".join(lines)[:3900],
             grid([[("🔄 Обновить", "m:app:" + arg)],
+                  [("🧩 Инстансы БД", "m:inst:" + arg)],
                   [("📜 Логи компонентов", "m:appc:" + arg), ("⚙ Перезапуск", "m:appr:" + arg)],
                   [("🧩 Приложения", "m:apps"), BACK]]))
+
+
+def inst_state(app):
+    """[(нода, состояние)] + члены placement для БД-группы приложения.
+    Источник правды о занятости — placement (остаточные данные после переноса не считаются)."""
+    out, placement_raw = [], ""
+    for name, ip in cluster_nodes():
+        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s '/usr/local/bin/tg-info.sh app %s 2>/dev/null; sed -n \"s/^placement: *//p\" /etc/db/apps.d/%s.yaml 2>/dev/null'" % (ip, shlex.quote(app), shlex.quote(app)), timeout=20)
+        lines = [l.strip() for l in body.splitlines() if l.strip()]
+        pl = [l for l in lines if l.startswith("[")]
+        if pl:
+            placement_raw = pl[-1]
+        state = "; ".join(l for l in lines if not l.startswith("["))
+        out.append((name, state or ""))
+    placement = placement_raw.split("#")[0].strip().rstrip()
+    members = [x.strip() for x in placement.strip("[]").split(",") if x.strip()]
+    return placement, members, out
+
+
+def scr_inst(arg):
+    placement, members, states = inst_state(arg)
+    lines = ["🧩 Инстансы БД «%s» — placement %s" % (arg, placement or "?"), ""]
+    for name, state in states:
+        if name in members:
+            lines.append("【%s】 %s" % (name, state or "в группе"))
+        else:
+            note = "свободна"
+            if "остановлен" in state:
+                note += " (лежат старые данные — будут перезалиты)"
+            lines.append("【%s】 %s" % (name, note))
+    rows = []
+    if len(members) > 1:
+        rows.append([("↔ Перенести инстанс", "m:instm:" + arg)])
+    rows.append([("➕ Добавить инстанс", "m:instd:" + arg), ("➖ Убрать инстанс", "m:instr:" + arg)])
+    rows.append([("🔄 Обновить", "m:inst:" + arg), ("◀ Назад", "m:app:" + arg)])
+    return ("\n".join(lines)[:3900], grid(rows))
+
+
+def scr_instd(arg):
+    _, members, states = inst_state(arg)
+    free = [n for n, _ in states if n not in members]
+    rows = [[(f, "ask:member-add:" + arg + ":" + f) for f in free[i:i+2]] for i in range(0, len(free), 2)]
+    if not rows:
+        return ("➕ Добавить инстанс %s: свободных нод нет (все заняты)." % arg,
+                grid([[("◀ Назад", "m:inst:" + arg)]]))
+    rows.append([("◀ Назад", "m:inst:" + arg)])
+    return ("➕ Добавить инстанс БД «%s» — на какую ноду? (копия данных через VIP)" % arg, grid(rows))
+
+
+def scr_instr(arg):
+    _, members, _states = inst_state(arg)
+    rows = [[(h, "ask:member-remove:" + arg + ":" + h) for h in members[i:i+2]] for i in range(0, len(members), 2)]
+    rows.append([("◀ Назад", "m:inst:" + arg)])
+    return ("➖ Убрать инстанс БД «%s» — с какой ноды?\n(первичный убрать нельзя — сначала перенос; данные остаются на диске)" % arg, grid(rows))
+
+
+def scr_instm(arg):
+    app, frm = arg.split(":", 1)
+    _, members, states = inst_state(app)
+    free = [n for n, _ in states if n not in members and n != frm]
+    rows = [[(f, "ask:move:" + app + ":" + frm + ":" + f) for f in free[i:i+2]] for i in range(0, len(free), 2)]
+    if not rows:
+        return ("↔ Перенести %s с %s: целевых нод нет." % (app, frm), grid([[("◀ Назад", "m:inst:" + app)]]))
+    rows.append([("◀ Назад", "m:inst:" + app)])
+    return ("↔ Перенести инстанс «%s» с %s — на какую ноду? (даунтайм ~10–20 с)" % (app, frm), grid(rows))
 
 
 def scr_appc(arg):
@@ -370,6 +445,14 @@ SCREENS = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_service
 
 def render(data):
     """callback_data → (текст, кнопки)."""
+    if data.startswith("m:instm:"):
+        return scr_instm(data[8:])
+    if data.startswith("m:instd:"):
+        return scr_instd(data[8:])
+    if data.startswith("m:instr:"):
+        return scr_instr(data[8:])
+    if data.startswith("m:inst:"):
+        return scr_inst(data[7:])
     if data.startswith("m:app:"):
         return scr_app(data[6:])
     if data.startswith("m:appc:"):
@@ -407,6 +490,24 @@ def do_action(chat_id, action, msg_id=None):
         out = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker restart %s'" % (node_ip(n), shlex.quote(c)), timeout=60)
         log("tgbot: restart %s@%s -> %s" % (c, n, out))
         finish("✅ Контейнер «%s» на %s перезапущен.%s" % (c, n, (" (" + out + ")") if out else ""))
+        return
+    if action.startswith("member-add:"):
+        _, app, n = action.split(":", 2)
+        out = sh("/usr/local/bin/app-member.sh add %s %s 2>&1 | tail -7" % (shlex.quote(app), shlex.quote(n)), timeout=240)
+        log("tgbot: member-add %s@%s: %s" % (app, n, out.replace("\n", " | ")))
+        finish("➕ Инстанс «%s» → %s\n%s" % (app, n, out[:1600]))
+        return
+    if action.startswith("member-remove:"):
+        _, app, n = action.split(":", 2)
+        out = sh("/usr/local/bin/app-member.sh remove %s %s 2>&1 | tail -6" % (shlex.quote(app), shlex.quote(n)), timeout=120)
+        log("tgbot: member-remove %s@%s: %s" % (app, n, out.replace("\n", " | ")))
+        finish("➖ Инстанс «%s» с %s\n%s" % (app, n, out[:1600]))
+        return
+    if action.startswith("move:"):
+        _, app, f, to = action.split(":", 3)
+        out = sh("/usr/local/bin/app-move.sh %s %s %s 2>&1 | tail -9" % (shlex.quote(app), shlex.quote(f), shlex.quote(to)), timeout=300)
+        log("tgbot: move %s %s->%s: %s" % (app, f, to, out.replace("\n", " | ")))
+        finish("↔ Перенос «%s»: %s → %s\n%s" % (app, f, to, out[:1600]))
         return
     if action == "backup":
         for n, ip in cluster_nodes():
