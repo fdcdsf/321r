@@ -1,15 +1,14 @@
+# 321r · манифест кластера (генерирует install/install.sh из install/inventory.conf)
+# Правится руками или через инвентарь; копия — на нодах в /etc/db/cluster.yml; секретов нет.
 cluster: 321r
-# Манифест кластера — прозрачный редактируемый список серверов (дизайн: V1/21 §4).
-# Правится руками; копия — на нодах в /etc/db/cluster.yml; версионируется в git.
-# Секретов здесь НЕТ (секреты — /etc/db/secrets/, umask 077).
 servers:
-  - {name: a, ip: 178.236.242.213, geo: ru, provider: vps1, size: s}
-  - {name: b, ip: 48.102.162.135,  geo: de, provider: vps2, size: m}
-  - {name: c, ip: 194.48.141.214,  geo: de, provider: vps3, size: m}
-control: b          # «говорящая» нода бота (команды); алерты шлёт ЛЮБАЯ нода
+  - {name: a, ip: 178.236.242.213, geo: -, provider: -, size: l, role: state}
+  - {name: b, ip: 48.102.162.135, geo: -, provider: -, size: l, role: work}
+  - {name: c, ip: 194.48.141.214, geo: -, provider: -, size: l, role: bulk}
+control: b   # «говорящая» нода бота (команды); алерты шлёт ЛЮБАЯ нода
 apps:
-  - {name: pangolin,  engine: pg,    replicas: 3, rule: "321"}
-  - {name: remnawave, engine: pg,    replicas: 2, rule: "321"}
-  - {name: komodo,    engine: mongo, replicas: 2, arbiter: 1, rule: "321"}
+  - {name: pangolin, engine: pg, replicas: 3, rule: "321"}
+  - {name: remnawave, engine: pg, replicas: 3, rule: "321"}
+  - {name: komodo, engine: mongo, replicas: 2, arbiter: 1, rule: "321"}
 backup: {on: 2-other-domains, retention: {daily: 30, weekly: 12, monthly: 12}, export: telegram-monthly}
 survival: {policy: manual-via-bot, auto_after: null}
