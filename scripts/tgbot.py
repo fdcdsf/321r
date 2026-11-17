@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-# 321r Telegram bot v3 — панель кластера на кнопках (дизайн V1/21 §3).
-# Вложенные меню, живой экран (editMessageText), подтверждения опасных действий.
-# Только stdlib (~20-30 МБ). Команды/кнопки — только от TG_CHAT_ID. Секреты — /etc/db/secrets/.
-#
-# Локальная проверка рендера: tgbot.py --screen status|services|...
-import json, re, shlex, subprocess, sys, time, urllib.parse, urllib.request
+# 321r Telegram bot v4 — ВСЁ генерируется из кластера (дизайн V1/21 §3).
+# Никаких ручных конфигов! Источники (авто):
+#   - ноды: cluster.yml; базы: /etc/db/apps.d + /var/lib/dbdata; контейнеры/сервисы: docker;
+#   - внешние точки: ресурсы Pangolin (БД) + домены сертификатов certbot;
+#   - карточки приложений: ГЕНЕРИРУЮТСЯ (БД из apps.d + группы контейнеров по именам).
+# Обновление данных: снимок раз в сутки (авто) ИЛИ кнопка «🔄 Обновить» на любом экране.
+# Только stdlib (~20-30 МБ). Доступ — только TG_CHAT_ID. Секреты — /etc/db/secrets/.
+import json, os, re, shlex, subprocess, sys, time, urllib.parse, urllib.request
 
 ENV = "/etc/db/secrets/telegram.env"
+SNAP = "/var/lib/tgbot/snapshot.json"
+SSH = "ssh -n -p 2222 -o BatchMode=yes -o ConnectTimeout=5"
 
 
 def load_env(path):
@@ -40,7 +44,7 @@ def call(method, timeout=60, **params):
         return json.load(r)
 
 
-def sh(cmd, timeout=25):
+def sh(cmd, timeout=30):
     try:
         return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout).stdout.strip()
     except Exception as e:
@@ -64,55 +68,8 @@ def node_ip(name):
     return dict(cluster_nodes()).get(name, "")
 
 
-def on_nodes(cmd, timeout=30):
-    out = []
-    for name, ip in cluster_nodes():
-        body = sh("ssh -n -p 2222 -o BatchMode=yes -o ConnectTimeout=5 root@%s %s" % (ip, shlex.quote(cmd)), timeout=timeout)
-        out.append((name, body or "нет ответа"))
-    return out
-
-
-def containers_on(name, ip):
-    return [c for c in sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker ps --format {{.Names}}'" % ip, timeout=10).splitlines() if c.strip()]
-
-
 def btn(text, data):
     return {"text": text, "callback_data": data}
-
-
-# ---------------- карточки приложений: ЧИТАЮТСЯ из /etc/db/bot-apps.yml (правится руками) ----------------
-# Всё живое бот открывает и без карточек (docker ps / service ls / dbdata / cluster.yml);
-# карточки — только группировка. Файл перечитывается при каждом показе.
-def load_cards():
-    cards = {}
-    try:
-        text = open("/etc/db/bot-apps.yml", encoding="utf-8").read()
-    except FileNotFoundError:
-        return cards
-    for block in re.split(r"\n\s*- id:", text)[1:]:
-        lines = block.splitlines()
-        cid = lines[0].strip()
-        c = {"title": cid, "desc": "", "urls": [], "db": None, "ct": [], "units": []}
-        for line in lines[1:]:
-            m = re.match(r"\s*(\w+):\s*(.*)$", line)
-            if not m:
-                continue
-            k, v = m.group(1), m.group(2).split("#")[0].strip()
-            if k in ("urls", "containers", "units"):
-                items = [x.strip() for x in v.split(",") if x.strip()]
-                if k == "containers":
-                    c["ct"] = [(x, x) for x in items]
-                else:
-                    c[k] = items
-            elif k == "db":
-                c["db"] = v or None
-            elif v:
-                c[k] = v
-        cards[cid] = c
-    return cards
-
-
-APPS = load_cards()
 
 
 def grid(rows):
@@ -121,68 +78,293 @@ def grid(rows):
 
 BACK = ("◀ В меню", "m:main")
 
-# ---------------- экраны: (текст, кнопки) ----------------
+
+# ================= СНИМОК КЛАСТЕРА (сбор раз в сутки или по кнопке) =================
+
+def collect():
+    """Собрать всё состояние кластера одним махом → snapshot.json."""
+    snap = {"time": time.strftime("%Y-%m-%d %H:%M"), "nodes": {}, "swarm": "", "puburls": ""}
+    for name, ip in cluster_nodes():
+        one = {}
+        for key, cmd in [
+            ("status", "/usr/local/bin/tg-info.sh status"),
+            ("db", "/usr/local/bin/tg-info.sh db"),
+            ("disk", "/usr/local/bin/tg-info.sh disk"),
+            ("backup", "/usr/local/bin/tg-info.sh backup"),
+            ("certs", "/usr/local/bin/tg-info.sh certs"),
+            ("local", "/usr/local/bin/tg-info.sh services"),
+        ]:
+            one[key] = sh("%s root@%s '%s'" % (SSH, ip, cmd), timeout=45)
+        one["containers"] = sh("%s root@%s 'docker ps -a --format \"{{.Names}}|{{.Status}}\"'" % (SSH, ip), timeout=20).splitlines()
+        one["apps"] = sh("%s root@%s 'for f in /etc/db/apps.d/*.yaml; do sed -n \"s/^name: */name=/p; s/^engine: */engine=/p; s/^placement: */placement=/p; s/^port: */port=/p\" $f | tr \"\\n\" \"|\"; echo; done'" % (SSH, ip), timeout=20).splitlines()
+        one["units"] = sh("%s root@%s 'systemctl list-units --type=service --state=running --no-pager --plain --no-legend | awk \"{print \\$1}\" | grep -E \"mtproto|pangolin|periphery|db-guard|tgbot\"'" % (SSH, ip), timeout=20).splitlines()
+        snap["nodes"][name] = one
+    snap["swarm"] = sh("docker service ls --format '{{.Name}}|{{.Replicas}}|{{.Image}}' 2>/dev/null", timeout=20)
+    # внешние точки ГЕНЕРИРУЮТСЯ: ресурсы Pangolin (из его БД) + домены сертификатов
+    urls = sh(""". /etc/db/secrets/pangolin.env 2>/dev/null; docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" pg-pangolin psql -h 10.66.0.99 -U postgres -d pangolin -tAc "SELECT 'https://'||"'"'"fullDomain"'"'"' FROM resources WHERE enabled = true" 2>/dev/null""", timeout=25)
+    certs = sh("certbot certificates 2>/dev/null | grep -oE '[a-z0-9.-]+\\.321r\\.ru' | sort -u", timeout=20)
+    mask = ["https://%s/" % d for d in certs.splitlines() if d.startswith(("vpn-", "tg."))]
+    snap["puburls"] = "\n".join(sorted(set([u for u in urls.splitlines() if u.startswith("http")] + mask)))
+    os.makedirs(os.path.dirname(SNAP), exist_ok=True)
+    with open(SNAP, "w", encoding="utf-8") as f:
+        json.dump(snap, f, ensure_ascii=False)
+    log("tgbot: снимок собран (%s)" % snap["time"])
+    return snap
+
+
+def snap(fresh=False):
+    s = None
+    if not fresh:
+        try:
+            s = json.load(open(SNAP, encoding="utf-8"))
+            t = os.path.getmtime(SNAP)
+            if time.time() - t > 86400:   # снимок живёт сутки
+                s = None
+        except Exception:
+            s = None
+    return s or collect()
+
+
+# ================= АВТО-ГЕНЕРАЦИЯ КАРТОЧЕК ПРИЛОЖЕНИЙ =================
+
+def auto_cards(s):
+    """Карточки генерируются сами: БД-приложения из apps.d + группы контейнеров по корням имён.
+    БД-карточки и группы контейнеров разделены ДАЖЕ при совпадении имён (панель ≠ ноды)."""
+    cards = {}
+    # 1) БД-приложения из apps.d (имя/engine/placement/порт)
+    for name, one in s["nodes"].items():
+        for ln in one.get("apps", []):
+            kv = dict((p.split("=", 1)[0], p.split("=", 1)[1].split("#")[0].strip()) for p in ln.strip("|").split("|") if "=" in p)
+            app = kv.get("name")
+            if not app:
+                continue
+            cards.setdefault(app, {"id": app, "title": "🗄 БД %s (%s)" % (app, kv.get("engine", "?")),
+                                    "desc": "placement %s · порт VIP %s · управление инстансами ниже" % (kv.get("placement", "?"), kv.get("port", "?")),
+                                    "db": app, "ct": [], "units": [], "urls": []})
+    # 2) БД-контейнеры (pg-*/mongod-*) — в карточку своего приложения
+    for name, one in s["nodes"].items():
+        for line in one.get("containers", []):
+            ct = line.split("|")[0]
+            m = re.match(r"(pg|mongod)-(.+)", ct)
+            if m and m.group(2) in cards:
+                c = cards[m.group(2)]
+                if ct not in [x[0] for x in c["ct"]]:
+                    c["ct"].append((ct, ct))
+    # 3) группы остальных контейнеров по корню имени — отдельные карточки «g:»
+    def root(n):
+        n = n.split(".")[0]
+        return re.split(r"[-_]", n)[0] if re.search(r"[-_]", n) else n
+    for name, one in s["nodes"].items():
+        for line in one.get("containers", []):
+            ct = line.split("|")[0]
+            if ct.startswith(("pg-", "mongod-")):
+                continue
+            r = root(ct)
+            gid = "g:" + r
+            c = cards.setdefault(gid, {"id": gid, "title": "🧩 " + r, "desc": "авто-группа (контейнеры/юниты)", "db": None, "ct": [], "units": [], "urls": []})
+            if ct not in [x[0] for x in c["ct"]]:
+                c["ct"].append((ct, ct))
+    # 4) systemd-юниты — в группу по корню имени
+    for name, one in s["nodes"].items():
+        for u in one.get("units", []):
+            r = root(u)
+            gid = "g:" + r
+            c = cards.setdefault(gid, {"id": gid, "title": "🧩 " + r, "desc": "авто-группа (контейнеры/юниты)", "db": None, "ct": [], "units": [], "urls": []})
+            if u not in [x[0] for x in c["units"]]:
+                c["units"].append((u, u))
+    return cards
+
+
+# ================= ЭКРАНЫ (всё из снимка) =================
 
 def scr_main():
-    return ("321r · панель кластера\nНажимайте разделы — экран обновляется на месте.",
-            grid([[("📊 Статус", "m:status"), ("🟢 Сервисы", "m:services")],
+    return ("321r · панель кластера\nВсё генерируется из кластера; снимок обновляется раз в сутки или по кнопке.",
+            grid([[("📊 Статус", "m:status"), ("🟢 Внешние точки", "m:services")],
                   [("🧩 Приложения", "m:apps"), ("📦 Контейнеры", "m:ctop")],
                   [("💾 Бэкапы", "m:backup"), ("🗄 Базы данных", "m:db")],
                   [("🖥 Серверы", "m:srv"), ("📜 Логи", "m:logs")],
                   [("⚙ Действия", "m:act"), ("ℹ Помощь", "m:help")]]))
 
 
+def stamp(s):
+    return "⏱ снимок %s" % s.get("time", "?")
+
+
 def scr_status(_=""):
-    lines = ["📊 Статус кластера", ""]
-    for name, body in on_nodes("/usr/local/bin/tg-info.sh status"):
-        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in body.splitlines())))
+    s = snap()
+    lines = ["📊 Статус кластера · " + stamp(s), ""]
+    for name, one in s["nodes"].items():
+        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in one.get("status", "").splitlines() if x.strip())))
     return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:status")], [BACK]]))
+            grid([[("🔄 Обновить", "r:m:status")], [BACK]]))
 
 
 def scr_services(_=""):
-    checks = [("панель Pangolin", "https://pangolin.321r.ru/"), ("панель Remnawave", "https://rem.321r.ru/"),
-              ("комодо", "https://komodo.321r.ru/"), ("маска vpn-a", "https://vpn-a.321r.ru/"),
-              ("маска vpn-b", "https://vpn-b.321r.ru/"), ("маска vpn-c", "https://vpn-c.321r.ru/"),
-              ("маска tg", "https://tg.321r.ru/")]
-    lines = ["🟢 Внешние точки", ""]
-    for title, url in checks:
+    s = snap()
+    lines = ["🟢 Внешние точки (генерируются из ресурсов Pangolin и сертификатов) · " + stamp(s), ""]
+    for url in [u for u in s.get("puburls", "").splitlines() if u]:
         code = sh("curl -sk -o /dev/null -w %%{http_code} --max-time 8 %s" % shlex.quote(url), timeout=12)
-        lines.append("%s %s — %s" % ("✅" if code == "200" else "⚠", title, code or "нет ответа"))
+        lines.append("%s %s — %s" % ("✅" if code == "200" else "⚠", url.replace("https://", ""), code or "нет ответа"))
     lines.append("")
-    lines.append("Локально по нодам:")
-    for name, body in on_nodes("/usr/local/bin/tg-info.sh services"):
-        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in body.splitlines())))
+    for name, one in s["nodes"].items():
+        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in one.get("local", "").splitlines() if x.strip())))
     return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:services")], [BACK]]))
+            grid([[("🔄 Обновить", "r:m:services")], [BACK]]))
 
 
 def scr_backup(_=""):
-    lines = ["💾 Бэкапы (правило 3-2-1)", ""]
-    for name, body in on_nodes("/usr/local/bin/tg-info.sh backup"):
-        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in body.splitlines())))
+    s = snap()
+    lines = ["💾 Бэкапы (правило 3-2-1) · " + stamp(s), ""]
+    for name, one in s["nodes"].items():
+        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in one.get("backup", "").splitlines() if x.strip())))
     return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:backup")],
+            grid([[("🔄 Обновить", "r:m:backup")],
                   [("🚀 Прогнать сейчас", "ask:backup"), ("🧪 Верификация", "ask:verify")],
                   [("📦 Выгрузить на диск", "ask:export")], [BACK]]))
 
 
 def scr_db(_=""):
-    lines = ["🗄 Базы данных", ""]
-    for name, body in on_nodes("/usr/local/bin/tg-info.sh db"):
-        lines.append("【%s】\n%s" % (name, body))
+    s = snap()
+    lines = ["🗄 Базы данных (авто-обнаружение по /var/lib/dbdata) · " + stamp(s), ""]
+    for name, one in s["nodes"].items():
+        lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in one.get("db", "").splitlines() if x.strip())))
     return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:db")], [BACK]]))
+            grid([[("🔄 Обновить", "r:m:db")], [BACK]]))
+
+
+def scr_ctop(_=""):
+    s = snap()
+    lines = ["📦 Контейнеры и сервисы (живой инвентарь) · " + stamp(s), ""]
+    for name, one in s["nodes"].items():
+        cts = [c.split("|")[0] for c in one.get("containers", [])]
+        lines.append("【%s】 %d шт: %s" % (name, len(cts), ", ".join(cts[:8]) + ("…" if len(cts) > 8 else "")))
+    lines.append("")
+    lines.append("Swarm-сервисы:")
+    for ln in s.get("swarm", "").splitlines():
+        p = ln.split("|")
+        if len(p) == 3:
+            lines.append("  %s — реплик %s — %s" % tuple(p))
+    rows = [[(n, "m:ct:" + n) for n, _ in cluster_nodes()]]
+    rows.append([("🔄 Обновить", "r:m:ctop")])
+    rows.append([BACK])
+    return ("\n".join(lines)[:3900], grid(rows))
+
+
+def scr_ct(arg):
+    s = snap()
+    one = s["nodes"].get(arg, {})
+    rows = []
+    cts = [c.split("|")[0] for c in one.get("containers", [])]
+    for i in range(0, min(len(cts), 14), 2):
+        rows.append([(cts[i], "m:ci:" + arg + ":" + cts[i])] +
+                    ([(cts[i + 1], "m:ci:" + arg + ":" + cts[i + 1])] if i + 1 < len(cts) else []))
+    rows.append([("◀ Назад", "m:ctop")])
+    return ("📦 Контейнеры на %s (живой список):" % arg, grid(rows))
+
+
+def scr_ci(arg):
+    node, ct = arg.split(":", 1)
+    st = sh("%s root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (SSH, node_ip(node), shlex.quote(ct)), timeout=10)
+    return ("📦 «%s» на %s — %s" % (ct, node, st or "нет данных"),
+            grid([[("📜 Логи", "m:lt:" + arg)],
+                  [("🔄 Перезапустить", "ask:restart:" + arg)],
+                  [("◀ Назад", "m:ct:" + node)]]))
+
+
+def scr_apps(_=""):
+    s = snap()
+    cards = auto_cards(s)
+    ids = sorted(cards)
+    rows = [[(cards[ids[i + j]]["title"].split("(")[0][:18], "m:app:" + ids[i + j]) for j in (0, 1) if i + j < len(ids)] for i in range(0, len(ids), 2)]
+    rows.append([("🔄 Обновить", "r:m:apps")])
+    rows.append([BACK])
+    return ("🧩 Приложения (генерируются автоматически: %d групп) · %s" % (len(ids), stamp(s)), grid(rows))
+
+
+def app_components(app, node, ip, cards):
+    a = cards.get(app, {})
+    parts = [c for c, _ in a.get("ct", [])]
+    units = [u for u, _ in a.get("units", [])]
+    cmd = ""
+    if parts:
+        cmd += "for c in %s; do printf '%%s=%%s ' $c $(docker inspect -f '{{.State.Status}}' $c 2>/dev/null || echo нет); done; " % " ".join(shlex.quote(p) for p in parts)
+    if units:
+        cmd += "for u in %s; do printf '%%s=%%s ' $u $(systemctl is-active $u 2>/dev/null || echo -); done" % " ".join(shlex.quote(u) for u in units)
+    return sh("%s root@%s %s" % (SSH, ip, shlex.quote(cmd.strip())), timeout=15) if cmd.strip() else ""
+
+
+def scr_app(arg):
+    s = snap()
+    cards = auto_cards(s)
+    a = cards.get(arg)
+    if not a:
+        return scr_apps()
+    lines = [a["title"], a["desc"], ""]
+    if a.get("urls"):
+        for url in a["urls"]:
+            code = sh("curl -sk -o /dev/null -w %%{http_code} --max-time 8 %s" % shlex.quote(url), timeout=12)
+            lines.append("%s %s — %s" % ("✅" if code == "200" else "⚠", url.replace("https://", ""), code or "нет"))
+        lines.append("")
+    lines.append("Ноды и компоненты:")
+    for name, ip in cluster_nodes():
+        comp = app_components(arg, name, ip, cards) or ""
+        db = ""
+        if a.get("db"):
+            for ln in s["nodes"].get(name, {}).get("db", "").splitlines():
+                if re.match(r"(pg|mongo) %s:" % re.escape(a["db"]), ln.strip()):
+                    db = ln.strip()
+        parts_line = " · ".join(x for x in (db, comp) if x)
+        lines.append("【%s】 %s" % (name, parts_line or "-"))
+    rows = [[("🔄 Обновить", "r:m:app:" + arg)]]
+    if a.get("db"):
+        rows.append([("🧩 Инстансы БД", "m:inst:" + arg)])
+    rows.append([("📜 Логи", "m:appc:" + arg), ("⚙ Перезапуск", "m:appr:" + arg)])
+    rows.append([("🧩 Приложения", "m:apps"), BACK])
+    return ("\n".join(lines)[:3900], grid(rows))
+
+
+def scr_appc(arg):
+    s = snap()
+    cards = auto_cards(s)
+    a = cards.get(arg, {})
+    picks = []
+    for ct, lbl in a.get("ct", []):
+        for name, ip in cluster_nodes():
+            if sh("%s root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (SSH, ip, shlex.quote(ct)), timeout=8):
+                picks.append(("%s @%s" % (ct, name), "m:lt:" + name + ":" + ct))
+    for u, lbl in a.get("units", []):
+        for name, ip in cluster_nodes():
+            st = sh("%s root@%s 'systemctl is-active %s 2>/dev/null'" % (SSH, ip, shlex.quote(u)), timeout=8)
+            if st and st != "inactive":
+                picks.append(("%s @%s" % (u, name), "m:lt:" + name + ":" + u))
+    rows = [[picks[i + j] for j in (0, 1) if i + j < len(picks)] for i in range(0, min(len(picks), 12), 2)]
+    rows.append([("◀ Назад", "m:app:" + arg)])
+    return ("📜 Логи — выберите компонент:", grid(rows))
+
+
+def scr_appr(arg):
+    s = snap()
+    cards = auto_cards(s)
+    a = cards.get(arg, {})
+    picks = []
+    for ct, lbl in a.get("ct", []):
+        for name, ip in cluster_nodes():
+            if sh("%s root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (SSH, ip, shlex.quote(ct)), timeout=8):
+                picks.append(("%s @%s" % (ct, name), "ask:restart:" + name + ":" + ct))
+    rows = [[picks[i + j] for j in (0, 1) if i + j < len(picks)] for i in range(0, min(len(picks), 12), 2)]
+    rows.append([("◀ Назад", "m:app:" + arg)])
+    return ("⚙ Перезапуск — выберите компонент (будет подтверждение):", grid(rows))
 
 
 def scr_srv(_=""):
     rows = [[(n, "m:srv:" + n) for n, _ in cluster_nodes()]]
+    rows.append([("🔄 Обновить", "r:m:srv")])
     rows.append([BACK])
     return ("🖥 Серверы — выберите ноду:", grid(rows))
 
 
 def scr_srv_node(arg):
-    return ("🖥 Нода %s — действия:" % arg,
+    return ("🖥 Нода %s:" % arg,
             grid([[("📊 Статус", "m:sn:" + arg + ":status"), ("💿 Диски", "m:sn:" + arg + ":disk")],
                   [("🗄 Базы", "m:sn:" + arg + ":db"), ("📜 Логи", "m:sn:" + arg + ":logs")],
                   [("📦 Контейнеры", "m:ct:" + arg)],
@@ -191,20 +373,11 @@ def scr_srv_node(arg):
 
 def scr_srv_node_info(arg):
     name, sub = arg.split(":", 1)
-    body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s '/usr/local/bin/tg-info.sh %s'" % (node_ip(name), shlex.quote(sub)), timeout=40)
-    return ("🖥 %s · %s\n%s" % (name, sub, (body or "нет ответа"))[:3900],
-            grid([[("🔄 Обновить", "m:sn:" + arg)], [("◀ Назад", "m:srv:" + name)]]))
-
-
-def scr_ct(arg):
-    ip = node_ip(arg)
-    cts = containers_on(arg, ip)
-    rows = []
-    for i in range(0, min(len(cts), 14), 2):
-        rows.append([(cts[i], "m:ci:" + arg + ":" + cts[i])] +
-                    ([(cts[i + 1], "m:ci:" + arg + ":" + cts[i + 1])] if i + 1 < len(cts) else []))
-    rows.append([("◀ Назад", "m:srv:" + arg)])
-    return ("📦 Контейнеры на %s (живой список) — выберите:" % arg, grid(rows))
+    s = snap()
+    key = "local" if sub == "services" else sub
+    body = s["nodes"].get(name, {}).get(key, "")
+    return ("🖥 %s · %s · %s\n%s" % (name, sub, stamp(s), (body or "нет данных"))[:3900],
+            grid([[("🔄 Обновить", "r:m:sn:" + arg)], [("◀ Назад", "m:srv:" + name)]]))
 
 
 def scr_logs(_=""):
@@ -214,11 +387,13 @@ def scr_logs(_=""):
 
 
 def scr_logs_node(arg):
-    cts = containers_on(arg, node_ip(arg))
+    s = snap()
+    one = s["nodes"].get(arg, {})
     picks = [("db-guard", "m:lt:" + arg + ":db-guard"), ("backup-321r", "m:lt:" + arg + ":backup321r"),
              ("система (за час)", "m:lt:" + arg + ":syslog")]
-    rows = [[t, d] for t, d in picks]
-    for i in range(0, min(len(cts), 10), 2):
+    cts = [c.split("|")[0] for c in one.get("containers", [])][:10]
+    rows = [[picks[i + j] for j in (0, 1) if i + j < len(picks)] for i in range(0, len(picks), 2)]
+    for i in range(0, len(cts), 2):
         rows.append([(cts[i], "m:lt:" + arg + ":" + cts[i])] +
                     ([(cts[i + 1], "m:lt:" + arg + ":" + cts[i + 1])] if i + 1 < len(cts) else []))
     rows.append([("◀ Назад", "m:logs"), BACK])
@@ -229,13 +404,13 @@ def scr_lt(arg):
     name, what = arg.split(":", 1)
     ip = node_ip(name)
     if what == "syslog":
-        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'journalctl --since -1h --no-pager | tail -20'" % ip, timeout=25)
+        body = sh("%s root@%s 'journalctl --since -1h --no-pager | tail -20'" % (SSH, ip), timeout=25)
     elif what == "backup321r":
-        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'tail -20 /var/log/backup321r.log 2>/dev/null'" % ip, timeout=25)
+        body = sh("%s root@%s 'tail -20 /var/log/backup321r.log 2>/dev/null'" % (SSH, ip), timeout=25)
     elif what == "db-guard":
-        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'journalctl -t db-guard --since -2h --no-pager | tail -20'" % ip, timeout=25)
+        body = sh("%s root@%s 'journalctl -t db-guard --since -2h --no-pager | tail -20'" % (SSH, ip), timeout=25)
     else:
-        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker logs --tail 20 %s 2>&1'" % (ip, shlex.quote(what)), timeout=25)
+        body = sh("%s root@%s 'docker logs --tail 20 %s 2>&1'" % (SSH, ip, shlex.quote(what)), timeout=25)
     return ("📜 %s · %s\n%s" % (name, what, (body or "пусто"))[:3900],
             grid([[("🔄 Обновить", "m:lt:" + arg)], [("◀ Назад", "m:lg:" + name)]]))
 
@@ -259,240 +434,100 @@ def scr_ask(arg):
         t = "Перезапустить контейнер «%s» на ноде %s?" % (c, n)
     elif arg.startswith("member-add:"):
         _, app, n = arg.split(":", 2)
-        t = "Добавить инстанс БД «%s» на ноду %s?\n(копия данных через VIP, ~1 мин; placement расширится)" % (app, n)
+        t = "Добавить инстанс БД «%s» на ноду %s? (копия данных через VIP, ~1 мин)" % (app, n)
     elif arg.startswith("member-remove:"):
         _, app, n = arg.split(":", 2)
-        t = "Убрать инстанс БД «%s» с ноды %s?\n(данные останутся на диске; первичный убрать нельзя)" % (app, n)
+        t = "Убрать инстанс БД «%s» с ноды %s? (данные останутся на диске)" % (app, n)
     elif arg.startswith("move:"):
         _, app, f, to = arg.split(":", 3)
-        t = "Перенести инстанс БД «%s» с %s на %s?\n(даунтайм ~10–20 с; при переносе первичного — плановый фейловер)" % (app, f, to)
+        t = "Перенести инстанс БД «%s» с %s на %s? (даунтайм ~10–20 с)" % (app, f, to)
     return (t, grid([[("✅ Да, выполнить", "do:" + arg)], [("❌ Отмена", "m:main")]]))
 
 
 def scr_help(_=""):
     return ("ℹ 321r · панель кластера\n\n"
-            "📊 Статус — load/RAM/диски/роли БД/бэкапы по всем нодам\n"
-            "🟢 Сервисы — внешние точки и локальные проверки\n"
-            "🧩 Приложения — карточки-группы (панель/ноды раздельно)\n"
-            "📦 Контейнеры — ВСЁ живое: контейнеры, swarm-сервисы (авто!)\n"
-            "💾 Бэкапы — правило 3-2-1: снимки, верификация, выгрузка\n"
-            "🖥 Серверы · 📜 Логи · ⚙ Действия\n\n"
-            "Всё живое видно автоматически: новые контейнеры, swarm-сервисы,\n"
-            "базы и ноды появятся сами. Карточки приложений — группировка из\n"
-            "/etc/db/bot-apps.yml (правится руками, подхватывается сразу).\n"
-            "Новая нода — в cluster.yml → cluster apply.\n"
+            "ВСЁ генерируется из кластера автоматически — без ручных настроек:\n"
+            "· серверы — cluster.yml · базы — apps.d/dbdata\n"
+            "· контейнеры и swarm-сервисы — docker · точки — ресурсы Pangolin + сертификаты\n"
+            "· карточки приложений — авто-группы (БД + контейнеры по именам)\n\n"
+            "Данные: снимок раз в сутки ИЛИ кнопка 🔄 Обновить на любом экране.\n"
+            "Новое на серверах (контейнер/сервис/база/нода) появляется само после обновления.\n"
             "Алерты приходят сюда сами. Текстовые команды тоже работают.",
             grid([[BACK]]))
 
 
-def scr_apps(_=""):
-    rows = [[(APPS[k]["title"].split("—")[0].strip(), "m:app:" + k) for k in list(APPS)[:2]],
-            [(APPS[k]["title"].split("—")[0].strip(), "m:app:" + k) for k in list(APPS)[2:]]]
-    rows.append([BACK])
-    return ("🧩 Приложения — выберите карточку:", grid(rows))
-
-
-def app_components(app, node, ip):
-    """Состояние контейнеров/юнитов приложения на ноде одной командой."""
-    a = APPS[app]
-    parts = []
-    for ct, _lbl in a["ct"]:
-        parts.append(ct)
-    cmd = ""
-    if parts:
-        cmd += "for c in %s; do printf '%%s=%%s ' $c $(docker inspect -f '{{.State.Status}}' $c 2>/dev/null || echo нет); done; " % " ".join(parts)
-    if a["units"]:
-        cmd += "for u in %s; do printf '%%s=%%s ' $u $(systemctl is-active $u 2>/dev/null || echo -); done" % " ".join(u for u, _ in a["units"])
-    return sh("ssh -n -p 2222 -o BatchMode=yes root@%s %s" % (ip, shlex.quote(cmd.strip())), timeout=12)
-
-
-def scr_app(arg):
-    a = APPS.get(arg)
-    if not a:
-        return scr_apps()
-    lines = [a["title"], a["desc"], "", "Внешние точки:"]
-    for url in a["urls"]:
-        code = sh("curl -sk -o /dev/null -w %%{http_code} --max-time 8 %s" % shlex.quote(url), timeout=12)
-        lines.append("%s %s — %s" % ("✅" if code == "200" else "⚠", url.replace("https://", ""), code or "нет ответа"))
-    lines.append("")
-    lines.append("Ноды и компоненты:")
-    for name, ip in cluster_nodes():
-        comp = app_components(arg, name, ip) or "нет ответа"
-        db = ""
-        if a["db"]:
-            db = sh("ssh -n -p 2222 -o BatchMode=yes root@%s '/usr/local/bin/tg-info.sh app %s'" % (ip, shlex.quote(a["db"])), timeout=20)
-        lines.append("【%s】%s%s" % (name, (" " + db) if db else "", (" · " + comp) if comp else ""))
-    return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:app:" + arg)],
-                  [("🧩 Инстансы БД", "m:inst:" + arg)],
-                  [("📜 Логи компонентов", "m:appc:" + arg), ("⚙ Перезапуск", "m:appr:" + arg)],
-                  [("🧩 Приложения", "m:apps"), BACK]]))
-
-
-def inst_state(app):
-    """[(нода, состояние)] + члены placement для БД-группы приложения.
-    Источник правды о занятости — placement (остаточные данные после переноса не считаются)."""
-    out, placement_raw = [], ""
-    for name, ip in cluster_nodes():
-        body = sh("ssh -n -p 2222 -o BatchMode=yes root@%s '/usr/local/bin/tg-info.sh app %s 2>/dev/null; sed -n \"s/^placement: *//p\" /etc/db/apps.d/%s.yaml 2>/dev/null'" % (ip, shlex.quote(app), shlex.quote(app)), timeout=20)
-        lines = [l.strip() for l in body.splitlines() if l.strip()]
-        pl = [l for l in lines if l.startswith("[")]
-        if pl:
-            placement_raw = pl[-1]
-        state = "; ".join(l for l in lines if not l.startswith("["))
-        out.append((name, state or ""))
-    placement = placement_raw.split("#")[0].strip().rstrip()
-    members = [x.strip() for x in placement.strip("[]").split(",") if x.strip()]
-    return placement, members, out
-
-
 def scr_inst(arg):
-    placement, members, states = inst_state(arg)
-    lines = ["🧩 Инстансы БД «%s» — placement %s" % (arg, placement or "?"), ""]
-    for name, state in states:
+    s = snap()
+    lines = ["🧩 Инстансы БД «%s»" % arg, ""]
+    members, placement = [], "?"
+    for name, one in s["nodes"].items():
+        for ln in one.get("apps", []):
+            kv = dict(p.split("=", 1) for p in ln.strip("|").split("|") if "=" in p)
+            if kv.get("name") == arg:
+                placement = kv.get("placement", placement)
+                members = [x.strip() for x in kv.get("placement", "").strip("[]").split(",") if x.strip()]
+                break
+        if members:
+            break
+    lines.append("placement: %s" % placement)
+    for name, one in s["nodes"].items():
+        db = ""
+        for ln in one.get("db", "").splitlines():
+            if re.match(r"(pg|mongo) %s:" % re.escape(arg), ln.strip()):
+                db = ln.strip()
         if name in members:
-            lines.append("【%s】 %s" % (name, state or "в группе"))
+            lines.append("【%s】 %s" % (name, db or "в группе"))
         else:
-            note = "свободна"
-            if "остановлен" in state:
-                note += " (лежат старые данные — будут перезалиты)"
-            lines.append("【%s】 %s" % (name, note))
+            lines.append("【%s】 свободна" % name)
     rows = []
     if len(members) > 1:
         rows.append([("↔ Перенести инстанс", "m:instm:" + arg)])
     rows.append([("➕ Добавить инстанс", "m:instd:" + arg), ("➖ Убрать инстанс", "m:instr:" + arg)])
-    rows.append([("🔄 Обновить", "m:inst:" + arg), ("◀ Назад", "m:app:" + arg)])
+    rows.append([("🔄 Обновить", "r:m:inst:" + arg), ("◀ Назад", "m:app:" + arg)])
     return ("\n".join(lines)[:3900], grid(rows))
 
 
+def inst_members(app):
+    for name, _ip in cluster_nodes():
+        pl = sh("%s root@%s 'sed -n \"s/^placement: *//p\" /etc/db/apps.d/%s.yaml 2>/dev/null'" % (SSH, node_ip(name), shlex.quote(app)), timeout=12)
+        if pl:
+            return [x.strip() for x in pl.split("#")[0].strip().strip("[]").split(",") if x.strip()]
+    return []
+
+
 def scr_instd(arg):
-    _, members, states = inst_state(arg)
-    free = [n for n, _ in states if n not in members]
-    rows = [[(f, "ask:member-add:" + arg + ":" + f) for f in free[i:i+2]] for i in range(0, len(free), 2)]
+    members = inst_members(arg)
+    free = [n for n, _ in cluster_nodes() if n not in members]
+    rows = [[(f, "ask:member-add:" + arg + ":" + f) for f in free[i:i + 2]] for i in range(0, len(free), 2)]
     if not rows:
-        return ("➕ Добавить инстанс %s: свободных нод нет (все заняты)." % arg,
-                grid([[("◀ Назад", "m:inst:" + arg)]]))
+        return ("➕ Добавить инстанс %s: свободных нод нет." % arg, grid([[("◀ Назад", "m:inst:" + arg)]]))
     rows.append([("◀ Назад", "m:inst:" + arg)])
-    return ("➕ Добавить инстанс БД «%s» — на какую ноду? (копия данных через VIP)" % arg, grid(rows))
+    return ("➕ Добавить инстанс БД «%s» — на какую ноду?" % arg, grid(rows))
 
 
 def scr_instr(arg):
-    _, members, _states = inst_state(arg)
-    rows = [[(h, "ask:member-remove:" + arg + ":" + h) for h in members[i:i+2]] for i in range(0, len(members), 2)]
+    members = inst_members(arg)
+    rows = [[(h, "ask:member-remove:" + arg + ":" + h) for h in members[i:i + 2]] for i in range(0, len(members), 2)]
     rows.append([("◀ Назад", "m:inst:" + arg)])
-    return ("➖ Убрать инстанс БД «%s» — с какой ноды?\n(первичный убрать нельзя — сначала перенос; данные остаются на диске)" % arg, grid(rows))
+    return ("➖ Убрать инстанс БД «%s» — с какой ноды? (первичный нельзя — сначала перенос)" % arg, grid(rows))
 
 
 def scr_instm(arg):
     app, frm = arg.split(":", 1)
-    _, members, states = inst_state(app)
-    free = [n for n, _ in states if n not in members and n != frm]
-    rows = [[(f, "ask:move:" + app + ":" + frm + ":" + f) for f in free[i:i+2]] for i in range(0, len(free), 2)]
-    if not rows:
-        return ("↔ Перенести %s с %s: целевых нод нет." % (app, frm), grid([[("◀ Назад", "m:inst:" + app)]]))
+    members = inst_members(app)
+    free = [n for n, _ in cluster_nodes() if n not in members and n != frm]
+    rows = [[(f, "ask:move:" + app + ":" + frm + ":" + f) for f in free[i:i + 2]] for i in range(0, len(free), 2)]
     rows.append([("◀ Назад", "m:inst:" + app)])
-    return ("↔ Перенести инстанс «%s» с %s — на какую ноду? (даунтайм ~10–20 с)" % (app, frm), grid(rows))
-
-
-def scr_appc(arg):
-    """Логи компонентов приложения: выбор компонента."""
-    a = APPS.get(arg)
-    if not a:
-        return scr_apps()
-    rows = []
-    picks = []
-    for ct, lbl in a["ct"]:
-        for name, ip in cluster_nodes():
-            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (ip, shlex.quote(ct)), timeout=8)
-            if st:
-                picks.append(("%s @%s" % (lbl, name), "m:lt:" + name + ":" + ct))
-    for u, lbl in a["units"]:
-        for name, ip in cluster_nodes():
-            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'systemctl is-active %s 2>/dev/null'" % (ip, shlex.quote(u)), timeout=8)
-            if st and st != "inactive":
-                picks.append(("%s @%s" % (lbl, name), "m:lt:" + name + ":" + u))
-    for i in range(0, min(len(picks), 12), 2):
-        rows.append([picks[i]] + ([picks[i + 1]] if i + 1 < len(picks) else []))
-    rows.append([("◀ Назад", "m:app:" + arg)])
-    return ("📜 Логи — выберите компонент %s:" % a["title"].split("—")[0].strip(), grid(rows))
-
-
-def scr_appr(arg):
-    """Перезапуск компонентов приложения: выбор (кнопка → подтверждение)."""
-    a = APPS.get(arg)
-    if not a:
-        return scr_apps()
-    rows = []
-    picks = []
-    for ct, lbl in a["ct"]:
-        for name, ip in cluster_nodes():
-            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (ip, shlex.quote(ct)), timeout=8)
-            if st:
-                picks.append(("%s @%s" % (lbl, name), "ask:restart:" + name + ":" + ct))
-    for i in range(0, min(len(picks), 12), 2):
-        rows.append([picks[i]] + ([picks[i + 1]] if i + 1 < len(picks) else []))
-    rows.append([("◀ Назад", "m:app:" + arg)])
-    return ("⚙ Перезапуск — выберите компонент %s (будет подтверждение):" % a["title"].split("—")[0].strip(), grid(rows))
-
-
-SCREENS = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_services,
-           "m:backup": scr_backup, "m:db": scr_db, "m:srv": scr_srv, "m:logs": scr_logs,
-           "m:act": scr_act, "m:help": scr_help, "m:apps": scr_apps}
-
-
-def scr_ctop(_=""):
-    """Живой инвентарь: контейнеры и swarm-сервисы — ВСЁ, что есть прямо сейчас."""
-    lines = ["📦 Контейнеры и сервисы (живой инвентарь)", ""]
-    for name, ip in cluster_nodes():
-        cts = containers_on(name, ip)
-        lines.append("【%s】 %d контейнеров: %s" % (name, len(cts), ", ".join(cts[:8]) + ("…" if len(cts) > 8 else "")))
-    swarm = sh("docker service ls --format '{{.Name}} · реплик {{.Replicas}} · {{.Image}}' 2>/dev/null", timeout=15)
-    lines.append("")
-    lines.append("Swarm-сервисы:")
-    lines.append(swarm if swarm else "  (нет)")
-    lines.append("")
-    lines.append("Новое (контейнер/сервис/база) появляется здесь автоматически.")
-    rows = [[(n, "m:ct:" + n) for n, _ in cluster_nodes()]]
-    rows.append([("⚙ Только swarm-сервисы", "m:swarm")])
-    rows.append([("🔄 Обновить", "m:ctop"), BACK])
-    return ("\n".join(lines)[:3900], grid(rows))
-
-
-def scr_swarm(_=""):
-    out = sh("docker service ls --format '{{.Name}}|{{.Replicas}}|{{.Image}}' 2>/dev/null", timeout=15)
-    lines = ["⚙ Swarm-сервисы (live):", ""]
-    for ln in out.splitlines():
-        parts = ln.split("|")
-        if len(parts) == 3:
-            lines.append("  %s — реплик %s — %s" % (parts[0], parts[1], parts[2]))
-    if not out:
-        lines.append("  (сервисов нет)")
-    lines.append("")
-    lines.append("Подробности: docker service ps — по запросу в /logs.")
-    return ("\n".join(lines)[:3900],
-            grid([[("🔄 Обновить", "m:swarm")], [("◀ Назад", "m:ctop")]]))
-
-
-def scr_ci(arg):
-    """Карточка одного контейнера: логи / перезапуск."""
-    node, ct = arg.split(":", 1)
-    st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (node_ip(node), shlex.quote(ct)), timeout=10)
-    return ("📦 Контейнер «%s» на %s — состояние: %s" % (ct, node, st or "нет данных"),
-            grid([[("📜 Логи", "m:lt:" + arg)],
-                  [("🔄 Перезапустить", "ask:restart:" + arg)],
-                  [("◀ Назад", "m:ct:" + node)]]))
+    return ("↔ Перенести инстанс «%s» с %s — на какую ноду?" % (app, frm), grid(rows))
 
 
 def render(data):
-    """callback_data → (текст, кнопки). Карточки перечитываются — правки bot-apps.yml видны сразу."""
-    global APPS
-    APPS = load_cards()
-    if data.startswith("m:ctop"):
-        return scr_ctop()
-    if data.startswith("m:swarm"):
-        return scr_swarm()
-    if data.startswith("m:ci:"):
-        return scr_ci(data[5:])
+    if data.startswith("m:app:"):
+        return scr_app(data[6:])
+    if data.startswith("m:appc:"):
+        return scr_appc(data[7:])
+    if data.startswith("m:appr:"):
+        return scr_appr(data[7:])
     if data.startswith("m:instm:"):
         return scr_instm(data[8:])
     if data.startswith("m:instd:"):
@@ -501,79 +536,82 @@ def render(data):
         return scr_instr(data[8:])
     if data.startswith("m:inst:"):
         return scr_inst(data[7:])
-    if data.startswith("m:app:"):
-        return scr_app(data[6:])
-    if data.startswith("m:appc:"):
-        return scr_appc(data[7:])
-    if data.startswith("m:appr:"):
-        return scr_appr(data[7:])
-    if data.startswith("m:srv:"):
-        return scr_srv_node(data[6:])
     if data.startswith("m:sn:"):
         return scr_srv_node_info(data[5:])
+    if data.startswith("m:srv:"):
+        return scr_srv_node(data[6:])
     if data.startswith("m:ct:"):
         return scr_ct(data[5:])
+    if data.startswith("m:ci:"):
+        return scr_ci(data[5:])
     if data.startswith("m:lg:"):
         return scr_logs_node(data[5:])
     if data.startswith("m:lt:"):
         return scr_lt(data[5:])
     if data.startswith("ask:"):
         return scr_ask(data[4:])
-    f = SCREENS.get(data)
+    table = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_services,
+             "m:backup": scr_backup, "m:db": scr_db, "m:ctop": scr_ctop, "m:apps": scr_apps,
+             "m:srv": scr_srv, "m:logs": scr_logs, "m:act": scr_act, "m:help": scr_help}
+    f = table.get(data)
     return f() if f else scr_main()
 
 
-# ---------------- действия ----------------
+# ================= ДЕЙСТВИЯ =================
 
 def do_action(chat_id, action, msg_id=None):
-    def finish(text):
+    def finish(text, kb=None):
         try:
             call("editMessageText", chat_id=chat_id, message_id=msg_id, text=text[:3900],
-                 reply_markup=json.dumps({"inline_keyboard": grid([[("◀ В меню", "m:main")]])}))
+                 reply_markup=json.dumps({"inline_keyboard": kb or grid([[("◀ В меню", "m:main")]])}))
         except Exception:
             pass
 
+    if action.startswith("refresh:"):
+        scr = action[8:]
+        finish("🔄 Снимаю состояние кластера…")
+        collect()
+        t, k = render(scr)
+        finish(t, k)
+        return
     if action.startswith("restart:"):
         _, n, c = action.split(":", 2)
-        out = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker restart %s'" % (node_ip(n), shlex.quote(c)), timeout=60)
+        out = sh("%s root@%s 'docker restart %s'" % (SSH, node_ip(n), shlex.quote(c)), timeout=60)
         log("tgbot: restart %s@%s -> %s" % (c, n, out))
-        finish("✅ Контейнер «%s» на %s перезапущен.%s" % (c, n, (" (" + out + ")") if out else ""))
+        finish("✅ «%s» на %s перезапущен.%s" % (c, n, (" (" + out + ")") if out else ""))
         return
     if action.startswith("member-add:"):
         _, app, n = action.split(":", 2)
         out = sh("/usr/local/bin/app-member.sh add %s %s 2>&1 | tail -7" % (shlex.quote(app), shlex.quote(n)), timeout=240)
-        log("tgbot: member-add %s@%s: %s" % (app, n, out.replace("\n", " | ")))
         finish("➕ Инстанс «%s» → %s\n%s" % (app, n, out[:1600]))
         return
     if action.startswith("member-remove:"):
         _, app, n = action.split(":", 2)
         out = sh("/usr/local/bin/app-member.sh remove %s %s 2>&1 | tail -6" % (shlex.quote(app), shlex.quote(n)), timeout=120)
-        log("tgbot: member-remove %s@%s: %s" % (app, n, out.replace("\n", " | ")))
         finish("➖ Инстанс «%s» с %s\n%s" % (app, n, out[:1600]))
         return
     if action.startswith("move:"):
         _, app, f, to = action.split(":", 3)
         out = sh("/usr/local/bin/app-move.sh %s %s %s 2>&1 | tail -9" % (shlex.quote(app), shlex.quote(f), shlex.quote(to)), timeout=300)
-        log("tgbot: move %s %s->%s: %s" % (app, f, to, out.replace("\n", " | ")))
         finish("↔ Перенос «%s»: %s → %s\n%s" % (app, f, to, out[:1600]))
         return
     if action == "backup":
         for n, ip in cluster_nodes():
-            sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'nohup /usr/local/bin/backup-321r.sh >/dev/null 2>&1 &'" % ip, timeout=10)
-        finish("🚀 Бэкап запущен на всех нодах. Итоги придут алертами (обычно 2–4 минуты).")
+            sh("%s root@%s 'nohup /usr/local/bin/backup-321r.sh >/dev/null 2>&1 &'" % (SSH, ip), timeout=10)
+        finish("🚀 Бэкап запущен на всех нодах. Итоги придут алертами.")
     elif action == "verify":
         for n, ip in cluster_nodes():
-            sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'nohup /usr/local/bin/backup-verify.sh >/dev/null 2>&1 &'" % ip, timeout=10)
-        finish("🧪 Верификация восстановления запущена (несколько минут). Итог придёт алертом: «ВСЁ ВОССТАНАВЛИВАЕТСЯ».")
+            sh("%s root@%s 'nohup /usr/local/bin/backup-verify.sh >/dev/null 2>&1 &'" % (SSH, ip), timeout=10)
+        finish("🧪 Верификация восстановления запущена. Итог придёт алертом.")
     elif action == "export":
         for n, ip in cluster_nodes():
-            sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'nohup /usr/local/bin/tg-export.sh >/dev/null 2>&1 &'" % ip, timeout=10)
-        finish("📦 Выгрузка запущена — файлы придут сюда сообщениями. Скопируйте их на физический диск.")
+            sh("%s root@%s 'nohup /usr/local/bin/tg-export.sh >/dev/null 2>&1 &'" % (SSH, ip), timeout=10)
+        finish("📦 Выгрузка запущена — файлы придут сюда сообщениями.")
     elif action == "survival":
         for n, ip in cluster_nodes():
-            out = sh("ssh -n -p 2222 -o BatchMode=yes root@%s /usr/local/bin/survival.sh 2>&1 | tail -2" % ip, timeout=90)
-            log("tgbot: survival на %s: %s" % (n, out.replace("\n", " | ")))
-        finish("⚠ Аварийный режим разослан. Если первичные были живы — предохранитель ничего не тронул. Проверьте 📊 Статус.")
+            sh("%s root@%s /usr/local/bin/survival.sh 2>&1 | tail -2" % (SSH, ip), timeout=90)
+            log("tgbot: survival на %s" % n)
+        finish("⚠ Аварийный режим разослан. Если первичные были живы — предохранитель ничего не тронул.")
     else:
         finish("Неизвестное действие.")
 
@@ -593,6 +631,9 @@ def handle_callback(cb):
         if data.startswith("do:"):
             do_action(chat_id, data[3:], msg_id)
             return
+        if data.startswith("r:"):            # обновить снимок и показать экран
+            do_action(chat_id, "refresh:" + data[2:], msg_id)
+            return
         text, keyboard = render(data)
         call("editMessageText", chat_id=chat_id, message_id=msg_id, text=text[:3900],
              reply_markup=json.dumps({"inline_keyboard": keyboard}))
@@ -601,11 +642,11 @@ def handle_callback(cb):
 
 
 def send_menu(chat_id):
-    text, keyboard = scr_main()
+    t, k = scr_main()
     try:
-        call("sendMessage", chat_id=chat_id, text=text, reply_markup=json.dumps({"inline_keyboard": keyboard}))
+        call("sendMessage", chat_id=chat_id, text=t, reply_markup=json.dumps({"inline_keyboard": k}))
     except Exception as e:
-        log("tgbot: ошибка отправки меню: %s" % e)
+        log("tgbot: ошибка меню: %s" % e)
 
 
 def handle_text(chat_id, text):
@@ -613,16 +654,16 @@ def handle_text(chat_id, text):
     cmd = parts[0].split("@")[0].lstrip("/") if text else ""
     alias = {"start": "m:main", "menu": "m:main", "help": "m:help", "status": "m:status",
              "services": "m:services", "backup": "m:backup", "db": "m:db", "disk": "m:srv",
-             "logs": "m:logs", "certs": "m:services"}
+             "logs": "m:logs", "apps": "m:apps", "containers": "m:ctop"}
     if cmd == "ping":
         try:
             call("sendMessage", chat_id=chat_id, text="pong · нода " + NODE)
         except Exception:
             pass
     elif cmd == "restart" and len(parts) > 1:
-        text_, kb_ = scr_ask("restart:" + NODE + ":" + parts[1])
+        t, k = scr_ask("restart:" + NODE + ":" + parts[1])
         try:
-            call("sendMessage", chat_id=chat_id, text=text_, reply_markup=json.dumps({"inline_keyboard": kb_}))
+            call("sendMessage", chat_id=chat_id, text=t, reply_markup=json.dumps({"inline_keyboard": k}))
         except Exception:
             pass
     elif cmd in alias:
@@ -636,7 +677,7 @@ def handle_text(chat_id, text):
                 pass
     elif cmd:
         try:
-            call("sendMessage", chat_id=chat_id, text="Неизвестная команда — вот меню:",
+            call("sendMessage", chat_id=chat_id, text="Неизвестная команда — меню:",
                  reply_markup=json.dumps({"inline_keyboard": scr_main()[1]}))
         except Exception:
             pass
@@ -645,17 +686,29 @@ def handle_text(chat_id, text):
 def main():
     if len(sys.argv) > 2 and sys.argv[1] == "--screen":
         s = sys.argv[2]
-        if not (s.startswith("m:") or s.startswith("ask:") or s.startswith("do:")):
+        if not (s.startswith("m:") or s.startswith("ask:") or s.startswith("r:")):
             s = "m:" + s
-        t, _k = render(s)
+        t, _ = render(s)
         print(t)
         return
+    if len(sys.argv) > 1 and sys.argv[1] == "--collect":
+        collect()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "--cards":
+        s = snap()
+        for cid, c in sorted(auto_cards(s).items()):
+            print("%s :: %s :: ct=%s units=%s" % (cid, c["title"], [x[0] for x in c["ct"]], [x[0] for x in c["units"]]))
+        return
     offset = 0
+    last_snap = 0
     log("tgbot: старт на ноде " + NODE)
     for chat in ALLOWED:
         send_menu(chat)
     while True:
         try:
+            if time.time() - last_snap > 86400:    # авто-снимок раз в сутки
+                collect()
+                last_snap = time.time()
             r = call("getUpdates", timeout=50, offset=offset,
                      allowed_updates=json.dumps(["message", "callback_query"]))
             for u in r.get("result", []):
