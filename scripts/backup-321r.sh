@@ -12,6 +12,10 @@ ME="$(awk -v s="$(hostname)" '$3==s{print $1}' /etc/db/nodes.map)"
 export RESTIC_PASSWORD="${RESTIC_PASSWORD:-}"
 [ -n "$RESTIC_PASSWORD" ] || { echo "нет RESTIC_PASSWORD в /etc/db/secrets/restic.env"; exit 1; }
 
+# Тишина для живого трафика: бэкапы НЕ должны ложно ронять health-checkи
+# (урок 2026-11-16: тяжёлый прогон спровоцировал ложный фейловер komodo).
+NICE="nice -n 19 ionice -c3"
+
 mkdir -p "$STAGE"
 log() { echo "$(date -Is) $*"; }
 ERRS=""
@@ -28,8 +32,16 @@ ls -1dt "$STAGE"/*/ "$STAGE"/*.gz 2>/dev/null | tail -n +3 | xargs -r rm -rf
 for d in /var/lib/dbdata/pg-*; do
   app="${d##*/pg-}"; [ -d "$d" ] || continue
   port="$(sed -n 's/^port: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
-  if docker exec -u postgres "pg-$app" sh -c \
-      "PGPASSWORD=\$REPL_PASSWORD pg_basebackup -h 10.66.0.99 -p ${port:-5432} -U replicator -D /var/lib/pgwal/bb-$STAMP -Ft -Xs -z" >/dev/null 2>&1; then
+  ok=""
+  for try in 1 2; do
+    if docker exec -u postgres "pg-$app" sh -c \
+        "PGPASSWORD=\$REPL_PASSWORD pg_basebackup -h 10.66.0.99 -p ${port:-5432} -U replicator -D /var/lib/pgwal/bb-$STAMP -Ft -Xs -z" >/dev/null 2>&1; then
+      ok=1; break
+    fi
+    log "pg-$app: попытка $try basebackup не удалась, повтор через 15 с"
+    sleep 15
+  done
+  if [ -n "$ok" ]; then
     mkdir -p "$STAGE/pg-$app-$STAMP"
     cp /var/lib/pgwal/"$app"/bb-"$STAMP"/*.gz "$STAGE/pg-$app-$STAMP/" 2>/dev/null
     rm -rf "/var/lib/pgwal/$app/bb-$STAMP"
@@ -54,7 +66,13 @@ for d in /var/lib/dbdata/mongo-*; do
   if docker exec "mongod-$app" mongodump --archive --gzip > "$STAGE/mongo-$app-$STAMP.archive.gz" 2>/dev/null; then
     log "mongo-$app: dump ок ($(du -h "$STAGE/mongo-$app-$STAMP.archive.gz" | cut -f1))"
   else
-    ERRS="$ERRS mongo-$app-dump"
+    log "mongo-$app: dump не удался, повтор через 15 с"
+    sleep 15
+    if docker exec "mongod-$app" mongodump --archive --gzip > "$STAGE/mongo-$app-$STAMP.archive.gz" 2>/dev/null; then
+      log "mongo-$app: dump ок со второй попытки"
+    else
+      ERRS="$ERRS mongo-$app-dump"
+    fi
   fi
 done
 
@@ -73,9 +91,9 @@ ok=0
 targets="$(awk -v me="$ME" '$1!=me{print $2}' /etc/db/nodes.map)"
 for ip in $targets; do
   repo="sftp:root@$ip:/var/lib/backup-repos/$ME"
-  restic -r "$repo" snapshots >/dev/null 2>&1 || restic -r "$repo" init >/dev/null 2>&1 || { ERRS="$ERRS init->$ip"; continue; }
-  if restic -r "$repo" backup "$STAGE" >/dev/null 2>&1; then
-    restic -r "$repo" forget --keep-daily 30 --keep-weekly 12 --keep-monthly 12 --prune >/dev/null 2>&1
+  $NICE restic -r "$repo" snapshots >/dev/null 2>&1 || $NICE restic -r "$repo" init >/dev/null 2>&1 || { ERRS="$ERRS init->$ip"; continue; }
+  if $NICE restic -r "$repo" backup "$STAGE" >/dev/null 2>&1; then
+    $NICE restic -r "$repo" forget --keep-daily 30 --keep-weekly 12 --keep-monthly 12 --prune >/dev/null 2>&1
     ok=$((ok+1)); log "репозиторий $ip: снимок ок"
   else
     ERRS="$ERRS backup->$ip"

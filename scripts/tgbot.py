@@ -103,7 +103,9 @@ def handle(chat_id, text):
     cmd = text.split()[0].split("@")[0].lstrip("/") if text else ""
     if cmd in ("start", "help"):
         send(chat_id, "321r бот управления.\nКоманды:\n/status — статус кластера\n"
-                      "/export — выгрузить бэкапы на физический носитель\n/ping — проверка связи")
+                      "/export — выгрузить бэкапы на физический носитель\n"
+                      "/survival — АВАРИЙНЫЙ режим (потеряно >половины нод; потеря данных!)\n"
+                      "/ping — проверка связи")
     elif cmd == "ping":
         send(chat_id, "pong · нода " + NODE)
     elif cmd == "status":
@@ -113,6 +115,14 @@ def handle(chat_id, text):
         for name, ip in cluster_nodes():
             sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'nohup /usr/local/bin/tg-export.sh >/dev/null 2>&1 &'" % ip, timeout=10)
         log("tgbot: выгрузка запущена на всех нодах")
+    elif cmd == "survival":
+        send(chat_id, "⚠ АВАРИЙНЫЙ РЕЖИМ: поднимаю выжившие инстансы принудительно.\n"
+                      "Цена: возможны потеря последних записей и split-brain при возврате нод.\n"
+                      "Возврат — только «шаг назад»/пересборка стендбаев (V1/14).")
+        for name, ip in cluster_nodes():
+            out = sh("ssh -n -p 2222 -o BatchMode=yes root@%s /usr/local/bin/survival.sh 2>&1 | tail -3" % ip, timeout=60)
+            log("tgbot: survival на %s: %s" % (name, out.replace("\n", " | ")))
+        send(chat_id, "Команда разослана. Если первичные были живы — ничего не изменилось (предохранитель). Проверьте /status.")
     elif cmd:
         send(chat_id, "Неизвестная команда. /help")
 

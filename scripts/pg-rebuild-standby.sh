@@ -15,17 +15,21 @@ APP="${1:-pangolin}"
 . "/etc/db/secrets/${APP}.env"
 DIR="/var/lib/dbdata/pg-${APP}"
 WAL="/var/lib/pgwal/${APP}"
+# порт приложения на VIP — из реестра (урок 2026-11-16: хардкод 5432 ломал пересборку
+# remnawave с портом 5433 — удалял данные и падал на авторизации!)
+PORT="$(sed -n 's/^port: *//p' "/etc/db/apps.d/${APP}.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
+PORT="${PORT:-5432}"
 
 cd "/opt/db/pg-${APP}"
 echo "останавливаю pg-${APP}..."
 docker compose down
 echo "чистю PGDATA и WAL-каталог..."
 rm -rf "${DIR:?}/"* "${WAL:?}/"* 2>/dev/null || true
-echo "pg_basebackup с первичного (через VIP)..."
+echo "pg_basebackup с первичного (через VIP, порт $PORT)..."
 docker run --rm -u postgres -e PGPASSWORD="$REPL_PASSWORD" -v "$DIR":/data postgres:17-alpine \
-  pg_basebackup -h 10.66.0.99 -p 5432 -U replicator -D /data -Fp -Xs
+  pg_basebackup -h 10.66.0.99 -p "$PORT" -U replicator -D /data -Fp -Xs
 touch "$DIR/standby.signal"
-echo "primary_conninfo = 'host=10.66.0.99 port=5432 user=replicator password=${REPL_PASSWORD}'" >> "$DIR/postgresql.auto.conf"
+echo "primary_conninfo = 'host=10.66.0.99 port=$PORT user=replicator password=${REPL_PASSWORD}'" >> "$DIR/postgresql.auto.conf"
 chown -R 70:70 "$DIR" "$WAL"   # alpine postgres uid=70; без chown WAL архив молча ломается
 docker compose up -d
 sleep 10

@@ -92,6 +92,74 @@ fence_off() {
   log "ФЕНС снят: кворум Swarm восстановлен — стендбаи догоняют по WAL"
 }
 
+# ---------- Аварийный режим (дизайн V1/21 §2): потеря большинства ----------
+# Политика из cluster.yml: survival: {policy: manual-via-bot|auto|off, auto_after: сек}
+# manual-via-bot (по умолчанию): спрашиваем владельца (команда /survival в боте).
+# auto — поднимаем сами через auto_after секунд без кворума. off — никогда.
+CLUSTER_CFG=/etc/db/cluster.yml
+SURV_POLICY="$(sed -n 's/^survival:.*policy: *//p' "$CLUSTER_CFG" 2>/dev/null | sed 's/[,}].*//; s/ *$//')"
+SURV_AFTER="$(sed -n 's/^survival:.*auto_after: *//p' "$CLUSTER_CFG" 2>/dev/null | sed 's/[,}].*//; s/ *$//')"
+case "$SURV_AFTER" in ""|null|*[!0-9]*) SURV_AFTER=900 ;; esac
+
+survival_on() {
+  # Подъём выжившего: снять фенс, форс-промоутить локальные инстансы.
+  # ЦЕНА (вслух!): потеря последних записей + риск split-brain при возврате нод.
+  # Возврат — строго «шаг назад»/пересборка стендбаев (V1/14).
+  touch "$STATE_DIR/survival"; rm -f "$STATE_DIR/survival_asked"
+  log "АВАРИЙНЫЙ РЕЖИМ: кворума нет — поднимаю локальные инстансы (могли быть потеряны последние записи!)"
+  fence_off || true
+  for d in /var/lib/dbdata/pg-*; do
+    app="${d##*/pg-}"; [ -d "$d" ] || continue
+    port="$(sed -n 's/^port: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
+    # ПРЕДОХРАНИТЕЛЬ (fail-safe!): поднимаем ТОЛЬКО когда однозначно видно,
+    # что локальный инстанс в recovery И первичный через VIP не отвечает (tcp).
+    # Неизвестность = НЕ трогаем. (Урок 2026-11-16: запрос без пароля давал «пусто»
+    # и ложно открывал промоушен при живом кластере!)
+    if tcp_ok 10.66.0.99 "${port:-5432}"; then
+      log "$app: через VIP отвечает ЖИВОЙ первичный — аварийный промоушен отменён"
+      continue
+    fi
+    rec="$(docker exec -u postgres "pg-$app" psql -U postgres -tAc 'SELECT pg_is_in_recovery()' 2>/dev/null || true)"
+    if [ "$rec" = t ]; then
+      if docker exec -u postgres "pg-$app" pg_ctl promote >/dev/null 2>&1; then
+        rm -f "/var/lib/dbdata/pg-$app/standby.signal"
+        log "$app: АВАРИЙНЫЙ promote выполнен (данные до последнего синка!)"
+      else
+        log "$app: аварийный promote не удался"
+      fi
+    else
+      log "$app: состояние неопределённое (rec='$rec') — НЕ трогаю (fail-safe)"
+    fi
+  done
+  for d in /var/lib/dbdata/mongo-*; do
+    app="${d##*/mongo-}"; [ -d "$d" ] || continue
+    arb="$(sed -n 's/^arbiter: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
+    [ "$arb" = "$ME_ALIAS" ] && continue
+    if [ "$(mongo_primaries "$app" 2>/dev/null)" = 0 ]; then
+      out="$(mongosh_eval "$app" 'try { rs.reconfig(rs.conf(), {force: true}); print("force ok") } catch (e) { print("err: " + e) }')"
+      log "$app: аварийный force-reconfig mongo ($out)"
+    else
+      log "$app: у mongo есть живой первичный — не трогаю"
+    fi
+  done
+}
+
+survival_tick() {
+  [ -f "$STATE_DIR/survival" ] && return 0
+  local lost since
+  lost="$(cat "$QUORUM_FILE" 2>/dev/null || echo "$now")"
+  since=$(( now - lost ))
+  [ "$since" -ge "$SURV_AFTER" ] || return 0
+  case "$SURV_POLICY" in
+    auto) survival_on ;;
+    off) return 0 ;;
+    *) if [ ! -f "$STATE_DIR/survival_asked" ]; then
+         touch "$STATE_DIR/survival_asked"
+         log "КВОРУМ ПОТЕРЯН ${since} с (меньше половины нод). Автоматика сдерживается. Для аварийного подъёма: /survival в боте или survival.sh на выжившей ноде"
+       fi ;;
+  esac
+}
+
 QUORUM_OK=0
 if swarm_ok; then
   QUORUM_OK=1
@@ -99,6 +167,10 @@ if swarm_ok; then
   if [ -f "$STATE_DIR/fenced" ]; then
     fence_off || true
     rm -f "$STATE_DIR/fenced"
+  fi
+  if [ -f "$STATE_DIR/survival" ]; then
+    rm -f "$STATE_DIR/survival" "$STATE_DIR/survival_asked"
+    log "КВОРУМ ВОССТАНОВЛЕН после аварийного режима! ОБЯЗАТЕЛЬНО сверить целостность: «шаг назад», пересборка стендбаев (pg-rebuild-standby.sh), см. V1/14"
   fi
 else
   [ -f "$QUORUM_FILE" ] || echo "$now" > "$QUORUM_FILE"   # отсчёт с первой потери
@@ -108,8 +180,11 @@ else
     touch "$STATE_DIR/fenced"
   fi
 fi
-# без кворума решений не принимаем (CP): дальше — только при живом кворуме
-[ "$QUORUM_OK" = 1 ] || exit 0
+# без кворума решений не принимаем (CP): дальше — только при живом кворуме.
+# Исключения: survival_tick (политика аварийного режима) и --survival-now (ручной подъём).
+if [ "$QUORUM_OK" = 0 ]; then
+  [ "${1:-}" = "--survival-now" ] || { survival_tick; exit 0; }
+fi
 
 # ---------- реестр и простые проверки ----------
 val() { sed -n "s/^$1: *//p" "$REG" | head -1 | sed 's/#.*$//; s/[[:space:]]*$//'; }
@@ -347,6 +422,12 @@ mongo_stepdown() {
 }
 
 # ======================================================================
+# ручной аварийный подъём: db-guard.sh --survival-now (бот /survival или survival.sh)
+if [ "${1:-}" = "--survival-now" ]; then
+  survival_on
+  exit 0
+fi
+
 for REG in /etc/db/apps.d/*.yaml; do
   [ -f "$REG" ] || continue
   APP="$(val name)"
