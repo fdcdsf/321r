@@ -111,11 +111,12 @@ survival_on() {
   for d in /var/lib/dbdata/pg-*; do
     app="${d##*/pg-}"; [ -d "$d" ] || continue
     port="$(sed -n 's/^port: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
-    # ПРЕДОХРАНИТЕЛЬ (fail-safe!): поднимаем ТОЛЬКО когда однозначно видно,
-    # что локальный инстанс в recovery И первичный через VIP не отвечает (tcp).
-    # Неизвестность = НЕ трогаем. (Урок 2026-11-16: запрос без пароля давал «пусто»
-    # и ложно открывал промоушен при живом кластере!)
-    if tcp_ok 10.66.0.99 "${port:-5432}"; then
+    # ПРЕДОХРАНИТЕЛЬ (fail-safe!): живость первичного — ТОЛЬКО протокольная
+    # (psql с паролем из secrets): tcp_ok бессмыслен — haproxy принимает хендшейк
+    # всегда, даже с мёртвым бэкендом (урок дрилла 2026-11-17). «t» = живой → отмена;
+    # ошибка/таймаут = первичного нет → промоушим (только при однозначном rec=t).
+    alive="$(docker exec -u postgres "pg-$app" sh -c "PGPASSWORD=\$POSTGRES_PASSWORD psql -h 10.66.0.99 -p ${port:-5432} -U postgres -tAc 'SELECT NOT pg_is_in_recovery()'" 2>/dev/null || true)"
+    if [ "$alive" = t ]; then
       log "$app: через VIP отвечает ЖИВОЙ первичный — аварийный промоушен отменён"
       continue
     fi
@@ -123,10 +124,14 @@ survival_on() {
     if [ "$rec" = t ]; then
       if docker exec -u postgres "pg-$app" pg_ctl promote >/dev/null 2>&1; then
         rm -f "/var/lib/dbdata/pg-$app/standby.signal"
-        log "$app: АВАРИЙНЫЙ promote выполнен (данные до последнего синка!)"
+        pg_proxy_repoint "$app" "$ME_IP" >/dev/null 2>&1 || true
+        log "$app: АВАРИЙНЫЙ promote выполнен, VIP переведён на $ME_IP (данные до последнего синка!)"
       else
         log "$app: аварийный promote не удался"
       fi
+    elif [ "$rec" = f ]; then
+      pg_proxy_repoint "$app" "$ME_IP" >/dev/null 2>&1 || true
+      log "$app: локальный инстанс уже первичный — VIP переведён на него"
     else
       log "$app: состояние неопределённое (rec='$rec') — НЕ трогаю (fail-safe)"
     fi
@@ -422,6 +427,11 @@ mongo_stepdown() {
 }
 
 # ======================================================================
+# перенос метки первичного (для app-move): db-guard.sh --claim-now <app> <node>
+if [ "${1:-}" = "--claim-now" ]; then
+  claim "$2" "$3"
+  exit $?
+fi
 # ручной аварийный подъём: db-guard.sh --survival-now (бот /survival или survival.sh)
 if [ "${1:-}" = "--survival-now" ]; then
   survival_on

@@ -25,6 +25,7 @@ echo "останавливаю pg-${APP}..."
 docker compose down
 echo "чистю PGDATA и WAL-каталог..."
 rm -rf "${DIR:?}/"* "${WAL:?}/"* 2>/dev/null || true
+chown -R 70:70 "$DIR" "$WAL"   # ДО basebackup: на свежей ноде каталоги принадлежат root
 echo "pg_basebackup с первичного (через VIP, порт $PORT)..."
 docker run --rm -u postgres -e PGPASSWORD="$REPL_PASSWORD" -v "$DIR":/data postgres:17-alpine \
   pg_basebackup -h 10.66.0.99 -p "$PORT" -U replicator -D /data -Fp -Xs
