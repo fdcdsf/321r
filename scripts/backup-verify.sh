@@ -91,6 +91,7 @@ EOF
 done
 
 if [ -z "$ERRS" ]; then
+  date +%s > /var/lib/pgbackup/last_verify   # маяк для бота/мониторинга (V1/21 §6)
   /usr/local/bin/tg-alert.sh "верификация бэкапов: ВСЁ ВОССТАНАВЛИВАЕТСЯ (PG поднялся из снимка, архивы целы)" >/dev/null 2>&1
   echo "ИТОГ: ок"
 else
