@@ -468,7 +468,16 @@ for REG in /etc/db/apps.d/*.yaml; do
 
   # голос: первичный жив с МОЕЙ точки зрения (TCP до его порта)
   alive=0
-  if [ -n "$D_IP" ] && tcp_ok "$D_IP" "$PORT"; then alive=1; fi
+  if [ -n "$D_IP" ] && tcp_ok "$D_IP" "$PORT"; then
+    alive=1
+    rm -f "$STATE_DIR/dead.$APP" 2>/dev/null || true
+  else
+    # АНТИ-ФЛЭП (урок 2026-11-17: под нагрузкой одна tcp-проверка моргала и вызывала
+    # ложный фейловер): «мёртв» — только после 2 подряд неудач (~20 с); раньше держим «жив»
+    n=0; [ -f "$STATE_DIR/dead.$APP" ] && n="$(cat "$STATE_DIR/dead.$APP" 2>/dev/null || echo 0)"
+    n=$((n+1)); echo "$n" > "$STATE_DIR/dead.$APP"
+    [ "$n" -ge 2 ] && alive=0 || alive=1
+  fi
   cast_vote "$APP" "$alive" || log "$APP: голос не записан"
   count_votes "$APP"
 

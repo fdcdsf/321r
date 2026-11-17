@@ -80,6 +80,45 @@ def btn(text, data):
     return {"text": text, "callback_data": data}
 
 
+# ---------------- реестр приложений (карточки в боте) ----------------
+APPS = {
+    "pangolin": {
+        "title": "🧩 Pangolin — кластер туннелей",
+        "desc": "Ингресс 443 (gerbil), дашборд, сайты-агенты, ресурсы",
+        "urls": ["https://pangolin.321r.ru/"],
+        "db": "pangolin",
+        "ct": [("pangolin", "панель"), ("pg-pangolin", "БД postgres"), ("gerbil", "вход 443"), ("traefik", "роутинг")],
+        "units": [("pangolin-site", "агент сайта")],
+    },
+    "remnawave": {
+        "title": "🧩 Remnawave — VPN и маскировка",
+        "desc": "Панель VPN, подписки, Xray-ноды, маски vpn-*/tg, Reality :2087",
+        "urls": ["https://rem.321r.ru/", "https://vpn-a.321r.ru/", "https://vpn-b.321r.ru/",
+                 "https://vpn-c.321r.ru/", "https://tg.321r.ru/"],
+        "db": "remnawave",
+        "ct": [("remnawave", "панель"), ("remnawave-subscription-page", "страница подписок"),
+               ("pg-remnawave", "БД postgres"), ("remnanode", "xray-нода")],
+        "units": [],
+    },
+    "komodo": {
+        "title": "🧩 Komodo — управление стеками",
+        "desc": "Core (swarm), агенты periphery, БД mongo (RS + арбитр)",
+        "urls": ["https://komodo.321r.ru/"],
+        "db": "komodo",
+        "ct": [("mongod-komodo", "БД mongo")],
+        "units": [("periphery", "агент")],
+    },
+    "mtproto": {
+        "title": "🧩 Telegram-прокси (mtproto)",
+        "desc": "Маска tg.321r.ru; egress из РФ — через mesh-шлюз на b",
+        "urls": ["https://tg.321r.ru/"],
+        "db": None,
+        "ct": [],
+        "units": [("mtproto-proxy", "прокси")],
+    },
+}
+
+
 def grid(rows):
     return [[btn(t, d) for t, d in row] for row in rows]
 
@@ -91,9 +130,10 @@ BACK = ("◀ В меню", "m:main")
 def scr_main():
     return ("321r · панель кластера\nНажимайте разделы — экран обновляется на месте.",
             grid([[("📊 Статус", "m:status"), ("🟢 Сервисы", "m:services")],
-                  [("💾 Бэкапы", "m:backup"), ("🗄 Базы данных", "m:db")],
-                  [("🖥 Серверы", "m:srv"), ("📜 Логи", "m:logs")],
-                  [("⚙ Действия", "m:act"), ("ℹ Помощь", "m:help")]]))
+                  [("🧩 Приложения", "m:apps"), ("💾 Бэкапы", "m:backup")],
+                  [("🗄 Базы данных", "m:db"), ("🖥 Серверы", "m:srv")],
+                  [("📜 Логи", "m:logs"), ("⚙ Действия", "m:act")],
+                  [("ℹ Помощь", "m:help")]]))
 
 
 def scr_status(_=""):
@@ -228,22 +268,114 @@ def scr_help(_=""):
     return ("ℹ 321r · панель кластера\n\n"
             "📊 Статус — load/RAM/диски/роли БД/бэкапы по всем нодам\n"
             "🟢 Сервисы — внешние точки (панели, маски) и локальные проверки\n"
-            "💾 Бэкапы — правило 3-2-1: снимки, верификация восстановления, выгрузка\n"
-            "🖥 Серверы — подробности по каждой ноде, контейнеры, перезапуск\n"
+            "🧩 Приложения — карточки Pangolin / Remnawave / Komodo / mtproto:\n"
+            "   где живёт, здоровье, роли БД, компоненты, логи и перезапуск\n"
+            "💾 Бэкапы — правило 3-2-1: снимки, верификация, выгрузка\n"
+            "🖥 Серверы — подробности по каждой ноде, контейнеры\n"
             "📜 Логи — последние события любого сервиса\n"
             "⚙ Действия — бэкап/верификация/выгрузка/аварийный режим\n\n"
-            "Алерты (фейловеры, бэкапы, диски) приходят сюда сами.\n"
+            "Алерты (фейловеры, бэкапы, дозор) приходят сюда сами.\n"
             "Текстовые команды тоже работают: /status /backup /logs и т.д.",
             grid([[BACK]]))
 
 
+def scr_apps(_=""):
+    rows = [[(APPS[k]["title"].split("—")[0].strip(), "m:app:" + k) for k in list(APPS)[:2]],
+            [(APPS[k]["title"].split("—")[0].strip(), "m:app:" + k) for k in list(APPS)[2:]]]
+    rows.append([BACK])
+    return ("🧩 Приложения — выберите карточку:", grid(rows))
+
+
+def app_components(app, node, ip):
+    """Состояние контейнеров/юнитов приложения на ноде одной командой."""
+    a = APPS[app]
+    parts = []
+    for ct, _lbl in a["ct"]:
+        parts.append(ct)
+    cmd = ""
+    if parts:
+        cmd += "for c in %s; do printf '%%s=%%s ' $c $(docker inspect -f '{{.State.Status}}' $c 2>/dev/null || echo нет); done; " % " ".join(parts)
+    if a["units"]:
+        cmd += "for u in %s; do printf '%%s=%%s ' $u $(systemctl is-active $u 2>/dev/null || echo -); done" % " ".join(u for u, _ in a["units"])
+    return sh("ssh -n -p 2222 -o BatchMode=yes root@%s %s" % (ip, shlex.quote(cmd.strip())), timeout=12)
+
+
+def scr_app(arg):
+    a = APPS.get(arg)
+    if not a:
+        return scr_apps()
+    lines = [a["title"], a["desc"], "", "Внешние точки:"]
+    for url in a["urls"]:
+        code = sh("curl -sk -o /dev/null -w %%{http_code} --max-time 8 %s" % shlex.quote(url), timeout=12)
+        lines.append("%s %s — %s" % ("✅" if code == "200" else "⚠", url.replace("https://", ""), code or "нет ответа"))
+    lines.append("")
+    lines.append("Ноды и компоненты:")
+    for name, ip in cluster_nodes():
+        comp = app_components(arg, name, ip) or "нет ответа"
+        db = ""
+        if a["db"]:
+            db = sh("ssh -n -p 2222 -o BatchMode=yes root@%s '/usr/local/bin/tg-info.sh app %s'" % (ip, shlex.quote(a["db"])), timeout=20)
+        lines.append("【%s】%s%s" % (name, (" " + db) if db else "", (" · " + comp) if comp else ""))
+    return ("\n".join(lines)[:3900],
+            grid([[("🔄 Обновить", "m:app:" + arg)],
+                  [("📜 Логи компонентов", "m:appc:" + arg), ("⚙ Перезапуск", "m:appr:" + arg)],
+                  [("🧩 Приложения", "m:apps"), BACK]]))
+
+
+def scr_appc(arg):
+    """Логи компонентов приложения: выбор компонента."""
+    a = APPS.get(arg)
+    if not a:
+        return scr_apps()
+    rows = []
+    picks = []
+    for ct, lbl in a["ct"]:
+        for name, ip in cluster_nodes():
+            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (ip, shlex.quote(ct)), timeout=8)
+            if st:
+                picks.append(("%s @%s" % (lbl, name), "m:lt:" + name + ":" + ct))
+    for u, lbl in a["units"]:
+        for name, ip in cluster_nodes():
+            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'systemctl is-active %s 2>/dev/null'" % (ip, shlex.quote(u)), timeout=8)
+            if st and st != "inactive":
+                picks.append(("%s @%s" % (lbl, name), "m:lt:" + name + ":" + u))
+    for i in range(0, min(len(picks), 12), 2):
+        rows.append([picks[i]] + ([picks[i + 1]] if i + 1 < len(picks) else []))
+    rows.append([("◀ Назад", "m:app:" + arg)])
+    return ("📜 Логи — выберите компонент %s:" % a["title"].split("—")[0].strip(), grid(rows))
+
+
+def scr_appr(arg):
+    """Перезапуск компонентов приложения: выбор (кнопка → подтверждение)."""
+    a = APPS.get(arg)
+    if not a:
+        return scr_apps()
+    rows = []
+    picks = []
+    for ct, lbl in a["ct"]:
+        for name, ip in cluster_nodes():
+            st = sh("ssh -n -p 2222 -o BatchMode=yes root@%s 'docker inspect -f {{.State.Status}} %s 2>/dev/null'" % (ip, shlex.quote(ct)), timeout=8)
+            if st:
+                picks.append(("%s @%s" % (lbl, name), "ask:restart:" + name + ":" + ct))
+    for i in range(0, min(len(picks), 12), 2):
+        rows.append([picks[i]] + ([picks[i + 1]] if i + 1 < len(picks) else []))
+    rows.append([("◀ Назад", "m:app:" + arg)])
+    return ("⚙ Перезапуск — выберите компонент %s (будет подтверждение):" % a["title"].split("—")[0].strip(), grid(rows))
+
+
 SCREENS = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_services,
            "m:backup": scr_backup, "m:db": scr_db, "m:srv": scr_srv, "m:logs": scr_logs,
-           "m:act": scr_act, "m:help": scr_help}
+           "m:act": scr_act, "m:help": scr_help, "m:apps": scr_apps}
 
 
 def render(data):
     """callback_data → (текст, кнопки)."""
+    if data.startswith("m:app:"):
+        return scr_app(data[6:])
+    if data.startswith("m:appc:"):
+        return scr_appc(data[7:])
+    if data.startswith("m:appr:"):
+        return scr_appr(data[7:])
     if data.startswith("m:srv:"):
         return scr_srv_node(data[6:])
     if data.startswith("m:sn:"):

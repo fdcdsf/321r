@@ -86,6 +86,30 @@ case "${1:-status}" in
     echo -n "  mtproto 8446: "; ss -tln 2>/dev/null | grep -q ':8446 ' && echo слушает || echo НЕТ
     echo -n "  панель localhost:3001: "; curl -sf -o /dev/null --max-time 5 http://localhost:3001/api/v1/ 2>/dev/null && echo ок || echo нет/чужая
     ;;
+  app)
+    # состояние БД конкретного приложения на ЭТОЙ ноде: tg-info.sh app <имя>
+    app="${2:?нужно имя приложения}"
+    if [ -d "/var/lib/dbdata/pg-$app" ]; then
+      if docker ps --format '{{.Names}}' | grep -qx "pg-$app"; then
+        r="$(docker exec -u postgres "pg-$app" psql -U postgres -tAc "SELECT CASE WHEN pg_is_in_recovery() THEN 'standby' ELSE 'PRIMARY' END" 2>/dev/null || echo '?')"
+        s="$(docker exec -u postgres "pg-$app" psql -U postgres -tAc "SELECT pg_size_pretty(sum(pg_database_size(datname))) FROM pg_database" 2>/dev/null || echo '?')"
+        echo "БД pg-$app: локально $r, базы: $s"
+      else
+        echo "БД pg-$app: инстанс остановлен"
+      fi
+    fi
+    if [ -d "/var/lib/dbdata/mongo-$app" ]; then
+      arb="$(sed -n 's/^arbiter: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
+      me="$(awk -v s="$(hostname)" '$3==s{print $1}' /etc/db/nodes.map)"; me="${me:-$(hostname | cut -d. -f1)}"
+      if [ "$arb" = "$me" ]; then
+        echo "БД mongo-$app: арбитр"
+      elif docker ps --format '{{.Names}}' | grep -qx "mongod-$app"; then
+        echo "БД mongo-$app: локально $(mongosh_eval_local "$app")"
+      else
+        echo "БД mongo-$app: инстанс остановлен"
+      fi
+    fi
+    ;;
   *)
     echo "tg-info.sh: status|disk|db|backup|certs|services"; exit 1 ;;
 esac
