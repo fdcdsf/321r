@@ -139,12 +139,14 @@ EOF
 }
 
 gen_mongo_compose() { # $1 = alias узла
-  local b rs="" mem="512m"
+  local b rs="" mem="640m"
   if [ "$CLASS" = local ]; then b=10.66.0.99; else b="$(map_ip "$1")"; fi
   [ "$CLASS" = cluster ] && rs=",\"--replSet\",\"rs_${APP}\""
-  # Арбитру — лимит 300m (данных не хранит). КЭШ НЕ УЖИМАТЬ: mongo не принимает
+  # Арбитру — лимит 400m (данных не хранит). КЭШ НЕ УЖИМАТЬ: mongo не принимает
   # wiredTigerCacheSizeGB < 0.25 (BadValue при старте, проверено 2026-11-16).
-  if [ -n "$ARB" ] && [ "$1" = "$ARB" ]; then mem="300m"; fi
+  # Лимиты 640m/400m (урок 2026-11-17): mongosh проверок внутри контейнера ест ~200 МБ
+  # пиком — при 512m/300m cgroup-OOM убивал mongosh и проверки падали.
+  if [ -n "$ARB" ] && [ "$1" = "$ARB" ]; then mem="400m"; fi
   cat <<EOF
 services:
   db:
