@@ -41,10 +41,11 @@ upsert() { # upsert <type> <name> <content> — одна запись
 
 multi_a() { # multi_a <name> <ip...> — несколько A-записей с одним именем (multi-A)
   local n="$1"; shift
-  local ip cur id body
-  cur="$(name_contents A "$n" | sort)"
+  local ip id body x found
   for ip in "$@"; do
-    if grep -qxF "$ip" <<<"$cur"; then
+    found=""
+    for x in $(name_contents A "$n"); do [ "$x" = "$ip" ] && found=1; done
+    if [ -n "$found" ]; then
       echo "  = $n A $ip уже есть"
     else
       body="$(jq -n --arg n "$n" --arg c "$ip" '{type:"A",name:$n,content:$c,ttl:1,proxied:false}')"
@@ -52,10 +53,13 @@ multi_a() { # multi_a <name> <ip...> — несколько A-записей с 
       ok "$n A → $ip (добавлено)"
     fi
   done
-  # лишние A убираем (смена состава нод)
+  # лишние A убираем (смена состава нод). Урок: НЕ grep -x по "$*" — строка содержит
+  # все IP через пробел и не совпадает целиком → вырезались ВСЕ записи (находка 33).
   for id in $(name_ids A "$n"); do
     ip="$(curl -fsS "${AUTH[@]}" "$API/zones/$ZONE_ID/dns_records/$id" | jq -r '.result.content')"
-    if ! grep -qxF "$ip" <<<"$*"; then
+    found=""
+    for x in "$@"; do [ "$x" = "$ip" ] && found=1; done
+    if [ -z "$found" ]; then
       curl -fsS "${AUTH[@]}" -X DELETE "$API/zones/$ZONE_ID/dns_records/$id" >/dev/null
       ok "$n: лишняя A $ip удалена"
     fi
