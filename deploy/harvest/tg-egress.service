@@ -1,0 +1,8 @@
+[Unit]
+Description=Telegram DC routes via mesh gw b
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tg-egress.sh
+[Install]
+WantedBy=multi-user.target

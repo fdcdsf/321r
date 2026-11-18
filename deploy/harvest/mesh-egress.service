@@ -1,0 +1,8 @@
+[Unit]
+Description=Mesh egress NAT (mtproto via b)
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mesh-egress.sh
+[Install]
+WantedBy=multi-user.target

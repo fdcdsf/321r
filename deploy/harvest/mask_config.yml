@@ -1,0 +1,61 @@
+# Маскировка VPN/mtproto (docs/remnawave.md): SNI -> TCP passthrough -> host-сервисы.
+# Живучесть: ЛЮБАЯ нода обслуживает любое имя vpn-* (сертификат с 4 SAN).
+# http(:80) -> https: браузер без схемы обязан уходить на 443 (иначе 404 без сертификата).
+http:
+  middlewares:
+    mask-https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true
+  routers:
+    mask-redir-a:
+      rule: "Host(`vpn-a.321r.ru`)"
+      entryPoints: [web]
+      service: noop@internal
+      middlewares: [mask-https-redirect]
+    mask-redir-b:
+      rule: "Host(`vpn-b.321r.ru`)"
+      entryPoints: [web]
+      service: noop@internal
+      middlewares: [mask-https-redirect]
+    mask-redir-c:
+      rule: "Host(`vpn-c.321r.ru`)"
+      entryPoints: [web]
+      service: noop@internal
+      middlewares: [mask-https-redirect]
+    mask-redir-tg:
+      rule: "Host(`tg.321r.ru`)"
+      entryPoints: [web]
+      service: noop@internal
+      middlewares: [mask-https-redirect]
+tcp:
+  routers:
+    mask-vpn-a:
+      rule: "HostSNI(`vpn-a.321r.ru`)"
+      entryPoints: [websecure]
+      service: mask-vpn
+      tls: { passthrough: true }
+    mask-vpn-b:
+      rule: "HostSNI(`vpn-b.321r.ru`)"
+      entryPoints: [websecure]
+      service: mask-vpn
+      tls: { passthrough: true }
+    mask-vpn-c:
+      rule: "HostSNI(`vpn-c.321r.ru`)"
+      entryPoints: [websecure]
+      service: mask-vpn
+      tls: { passthrough: true }
+    mask-tg:
+      rule: "HostSNI(`tg.321r.ru`)"
+      entryPoints: [websecure]
+      service: mask-tg
+      tls: { passthrough: true }
+  services:
+    mask-vpn:
+      loadBalancer:
+        servers:
+          - address: "172.22.0.1:9446"
+    mask-tg:
+      loadBalancer:
+        servers:
+          - address: "172.22.0.1:8446"
