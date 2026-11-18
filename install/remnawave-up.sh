@@ -117,18 +117,25 @@ MSEC="$(cat "$MSEC_FILE")"
 pids=()
 for a in $(node_names); do
   (
-    nssh "$a" 'command -v mtbuddy >/dev/null 2>&1 || {
-      curl -fsSL https://github.com/sleep3r/mtproto.zig/releases/download/v1.15.4/mtbuddy-linux-x86_64.tar.gz | tar xz -C /usr/local/bin
-      chmod +x /usr/local/bin/mtbuddy* 2>/dev/null || true
-      mv /usr/local/bin/mtbuddy-linux-x86_64 /usr/local/bin/mtbuddy 2>/dev/null || true'
+    nssh "$a" 'set -e
+      if ! command -v mtbuddy >/dev/null 2>&1; then
+        mkdir -p /tmp/mtb
+        curl -fsSL https://github.com/sleep3r/mtproto.zig/releases/download/v1.15.4/mtbuddy-linux-x86_64.tar.gz | tar xz -C /tmp/mtb
+        bin=$(find /tmp/mtb -type f -name "mtbuddy*" | head -1)
+        install -m 755 "$bin" /usr/local/bin/mtbuddy
+        rm -rf /tmp/mtb
+      fi
+      echo "mtbuddy: $(/usr/local/bin/mtbuddy --version 2>/dev/null | head -1 || echo есть)"'
     sed -e "s/tg\.321r\.ru/tg.$DOMAIN/g" -e "s/user = \".*\"/user = \"$MSEC\"/" "$H/mtproto-config.toml" \
       | nssh "$a" 'cat > /root/mtproto-config.toml'
-    nssh "$a" '[ -x /opt/mtproto-proxy/mtproto-proxy ] || /usr/local/bin/mtbuddy install --config /root/mtproto-config.toml --no-dpi --yes >/dev/null 2>&1
-      systemctl enable --now mtproto-proxy.service >/dev/null 2>&1
+    nssh "$a" 'if [ ! -x /opt/mtproto-proxy/mtproto-proxy ]; then
+        /usr/local/bin/mtbuddy install --config /root/mtproto-config.toml --no-dpi --yes >/dev/null 2>&1 || true
+      fi
+      systemctl enable --now mtproto-proxy.service >/dev/null 2>&1 || true
       # mtbuddy сам открывает порт наружу — закрываем и открываем только от docker
       ufw status numbered | grep -E "8446.*ALLOW.*Anywhere" | cut -d"]" -f1 | tr -d " [" | sort -rn | xargs -r -n1 ufw --force delete >/dev/null 2>&1 || true
-      ufw allow from 172.16.0.0/12 to any port 8446 proto tcp >/dev/null 2>&1'
-    echo "mtproto: $(nssh "$a" 'systemctl is-active mtproto-proxy.service')"
+      ufw allow from 172.16.0.0/12 to any port 8446 proto tcp >/dev/null 2>&1 || true
+      echo "mtproto: $(systemctl is-active mtproto-proxy.service 2>/dev/null || echo не-установлен)"'
   ) 2>&1 | sed "s/^/[$a] /" &
   pids+=($!)
 done
@@ -154,10 +161,13 @@ nssh "$RU_NODE" 'chmod +x /usr/local/bin/tg-egress.sh
   /usr/local/bin/tg-egress.sh'
 ok "$RU_NODE: Telegram-трафик уходит через $CTRL (mesh-egress на шлюзе)"
 
-step "Traefik-маска (passthrough vpn-* и tg) + пересоздание gerbil/traefik"
+step "Traefik-маска (passthrough vpn-* и tg)"
+# Урок: force-recreate gerbil/traefik через compose НАДЕЖНО зависает (traefik живёт в
+# netns gerbil). Динамические конфиги traefik перечитываются сами — достаточно
+# рестарта самого traefik (gerbil не трогаем: его одиночный рестарт рвёт ingress).
 for a in $(node_names); do
   sed -e "s/321r\.ru/$DOMAIN/g" "$H/mask_config.yml" | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
-  nssh "$a" 'cd /opt/pangolin && docker compose up -d --force-recreate gerbil traefik >/dev/null 2>&1' &
+  nssh "$a" 'docker restart traefik >/dev/null 2>&1 || true' &
 done
 wait
 ok "маска подключена к traefik (матрица 3×3 на каждой ноде)"
