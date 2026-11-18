@@ -111,6 +111,23 @@ step_preflight() {
     fi
     [ "${ram:-0}" -ge 900 ] || warn "$a: RAM ${ram}МБ — меньше честного минимума 1 ГБ (V1/20)"
   done
+  # Бюджет по составу (V1/20): полный состав (панели + mongo + базы) требует ноду ≥4ГБ.
+  # Урок теста: все ноды по 2ГБ + полный состав = swap-шторм, load 70, mongod без первичного.
+  if [ "${PROFILE:-L}" != "S" ]; then
+    local maxram=0 r row has_mongo=""
+    for a in $(node_names); do
+      r="$(nssh "$a" 'free -m | awk "/Mem:/{print \$2}"' || echo 0)"
+      [ "${r:-0}" -gt "$maxram" ] && maxram="$r"
+    done
+    for row in "${APPS[@]}"; do [ "$(app_engine "$row")" = "mongo" ] && has_mongo=1; done
+    if [ "$maxram" -lt 3800 ] && [ "$maxram" -gt 0 ]; then
+      warn "бюджет: самая большая нода — ${maxram}МБ, а полный состав по V1/20 требует ≥4ГБ на одной ноде."
+      warn "При 2ГБ ставьте PROFILE=S (панели вовне, без mongo) или возьмите сервер побольше — иначе будет swap-шторм."
+    fi
+    if [ -n "$has_mongo" ] && [ "$maxram" -lt 1900 ]; then
+      warn "mongo на нодах <2ГБ — по V1/20 не рекомендуется (wiredTiger + mongosh = OOM-риск)"
+    fi
+  fi
   [ "$bad" = 0 ] || fail "предпроверки не пройдены — исправьте и повторите (можно --from=preflight)"
   setup_cluster_key
 }
