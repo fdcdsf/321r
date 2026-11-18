@@ -83,7 +83,20 @@ SSHD=/etc/ssh/sshd_config
 grep -q '^Port 2222' "$SSHD" || echo 'Port 2222' >> "$SSHD"
 grep -q '^Port 22$' "$SSHD" || echo 'Port 22' >> "$SSHD"    # временно, пока ключевой вход не подтверждён
 grep -q '^MaxAuthTries' "$SSHD" && sed -i 's/^MaxAuthTries .*/MaxAuthTries 3/' "$SSHD" || echo 'MaxAuthTries 3' >> "$SSHD"
+# Ubuntu 24.04+: sshd может быть socket-активирован (ssh.socket держит только :22),
+# тогда Port из конфига ИГНОРИРУЕТСЯ (урок: 2222 «не слушался», db-add падал).
+# Переходим на классический sshd.service — порты берутся из sshd_config.
+if systemctl is-active ssh.socket >/dev/null 2>&1 || systemctl is-enabled ssh.socket >/dev/null 2>&1; then
+  systemctl disable --now ssh.socket >/dev/null 2>&1 || true
+  systemctl enable --now ssh >/dev/null 2>&1 || true
+fi
 systemctl reload sshd 2>/dev/null || systemctl reload ssh
+# ГРОМКАЯ проверка: если 2222 не слушается — это ломает весь кластер, стоп!
+for i in $(seq 1 10); do
+  ss -tln 2>/dev/null | grep -q ':2222 ' && break
+  sleep 2
+done
+ss -tln 2>/dev/null | grep -q ':2222 ' || { echo "ОШИБКА: порт 2222 не слушается (sshd socket-активация?)" >&2; exit 1; }
 
 # --- 6) firewall ---
 ufw allow 2222/tcp >/dev/null
