@@ -1,8 +1,11 @@
 # Traefik config (одинаков на всех нодах, кроме почты — __EMAIL__). Основа:
 # docs.pangolin.net/self-host/clustering/deploy-a-cluster (Step "Write the Traefik configuration").
-# Наши отличия: у дашборда (:3000, публикуется как host:8443) включён TLS с
-# certResolver letsencrypt (HTTP-01 на :80) — «балансировщик» у нас = multi-A DNS,
-# поэтому TLS дашборда Terminирует traefik на каждой ноде (в гайде — внешний LB).
+# Наши отличия: TLS дашборда терминирует traefik на каждой ноде («балансировщик» у нас =
+# multi-A DNS; в гайде — внешний LB). Сертификат дашборда — ФАЙЛОВЫЙ (certbot →
+# dynamic/panel_cert.yml), а НЕ ACME traefik: NS-делегирование _acme-challenge.<домен> →
+# dns.<домен> (оно нужно для wildcard Pangolin) уводит DNS-01 проверку от Cloudflare к
+# нашей DNS, где нет TXT, который traefik записал через API → TRAEFIK DEFAULT CERT
+# (находка 35, 2026-11-18). Резолвер letsencrypt оставлен: его имя ждёт config.yml Pangolin.
 providers:
   file:
     directory: "/var/dynamic"
@@ -41,10 +44,8 @@ entryPoints:
   dashboard:
     address: ":2053" # контейнерный порт из таблицы §3 (хост: 8443 и 2053 → 2053);
                      # порт :3000 намеренно НЕ используется — DOCKER-USER считает
-                     # контейнерные порты, а 3000 в белом списке нет
-    http:
-      tls:
-        certResolver: letsencrypt
+                     # контейнерные порты, а 3000 в белом списке нет.
+                     # TLS включают роутеры (tls: {}), сертификат — файловый (panel_cert.yml).
   dns:
     address: ":53/udp"
 

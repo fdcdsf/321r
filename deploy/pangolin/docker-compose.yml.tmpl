@@ -70,6 +70,7 @@ services:
       - ./config/traefik/logs:/var/log/traefik
       - ./config/certificates:/var/certificates
       - ./config/dynamic:/var/dynamic:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro # сертификат дашборда (certbot, находка 35)
 
 networks:
   default:

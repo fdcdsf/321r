@@ -13,6 +13,9 @@ step "Сбор секретов с нод"
 R_PGPASS="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
 R_APPPASS="$(nssh "$CTRL" "grep '^APP_PASSWORD=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
 R_PGSERV="$(nssh "$CTRL" "grep '^PANGOLIN_SERVER_SECRET=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
+# код первичной настройки Pangolin — одноразовый; печатается в логах контейнера.
+SETUP_TOK="$(nssh "$CTRL" 'docker logs --tail 4000 pangolin 2>&1 | grep -A1 "SETUP TOKEN" | grep "Token:" | awk "{print \$2}" | tail -1' 2>/dev/null || true)"
+[ -n "$SETUP_TOK" ] && ok "setup token Pangolin получен (значение — только в файл)" || warn "setup token в логах не найден — похоже, первичная настройка уже пройдена"
 RW_PASS="$(nssh "$CTRL" "grep '^APP_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
 RW_PG="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
 K_ADMIN="$(nssh "$CTRL" "grep '^KOMODO_INIT_ADMIN_PASSWORD=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
@@ -55,6 +58,10 @@ $CLUSTER_KEY
 
 --- 4. PANGOLIN --------------------------------------------------------------
   Панель:      https://pangolin.${DOMAIN:-<ваш-домен>} (первичный онбординг — вы задаёте админа)
+  Код первичной настройки (setup token):
+    ${SETUP_TOK:-(не найден в логах — настройка, похоже, уже пройдена)}
+    взять самому: docker logs pangolin | grep -A1 "SETUP TOKEN"
+    (действует, пока не пройден первичный онбординг)
   server.secret: $R_PGSERV
   EE-лицензия: вводится в панели (Settings).
 

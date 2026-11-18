@@ -3,7 +3,9 @@
 #   - роутеры дашборда привязаны к Host(pangolin.321r.ru) и висят на ДВУХ entrypoint:
 #     dashboard (:3000, публикуется как 8443/2053) И websecure (:443, через SNI-прокси
 #     gerbil) — порт 8443 из РФ режется, стандартный 443 проходит (проверено 2026-11-10);
-#   - TLS через certResolver letsencrypt (HTTP-01 на :80).
+#   - TLS дашборда — файловый сертификат (certbot, dynamic/panel_cert.yml), не ACME
+#     traefik: NS-делегирование _acme-challenge.<домен> уводит DNS-01 проверку от
+#     Cloudflare (находка 35). Роутеры — tls: {} (берёт серт из store по SNI).
 # Ресурсные роутеры Pangolin дописывает сюда же (file_mode).
 http:
   middlewares:
@@ -22,8 +24,7 @@ http:
         - websecure
       middlewares:
         - badger
-      tls:
-        certResolver: letsencrypt
+      tls: {}
 
     # API router (handles /api/v1 paths)
     api-router:
@@ -34,8 +35,7 @@ http:
         - websecure
       middlewares:
         - badger
-      tls:
-        certResolver: letsencrypt
+      tls: {}
 
     # WebSocket router
     ws-router:
@@ -46,8 +46,7 @@ http:
         - websecure
       middlewares:
         - badger
-      tls:
-        certResolver: letsencrypt
+      tls: {}
 
   services:
     next-service:

@@ -39,6 +39,38 @@ for a in $(node_names); do
   ok "$a: pangolin.env готов"
 done
 
+step "Сертификат дашборда (certbot DNS-01 → файл для traefik)"
+# Находка 35: собственный ACME traefik с dnsChallenge в Cloudflare здесь НЕ работает —
+# NS _acme-challenge.<домен> делегирован встроенной DNS Pangolin (это нужно для wildcard),
+# проверка уходит туда, где нет TXT, записанного traefik через API → TRAEFIK DEFAULT CERT
+# (браузер блокирует панель). certbot — путь, уже доказанный масками VPN. Идемпотентно:
+# сертификат есть и не просрочен — certbot ничего не перезапрашивает.
+for a in $(node_names); do
+  nssh "$a" 'command -v certbot >/dev/null 2>&1 || {
+    for i in $(seq 1 30); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 5; done
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null; }
+    systemctl enable --now certbot.timer >/dev/null 2>&1 || true'
+  ok "$a: certbot готов"
+done
+pids=(); bad=0
+for a in $(node_names); do
+  (
+    ncp "$a" "$ROOT/scripts/panel-cert-reload.sh" "/usr/local/bin/panel-cert-reload.sh"
+    nssh "$a" "chmod 755 /usr/local/bin/panel-cert-reload.sh
+      mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+      cp /usr/local/bin/panel-cert-reload.sh /etc/letsencrypt/renewal-hooks/deploy/
+      certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+        -d pangolin.$DOMAIN --non-interactive --agree-tos -m $EMAIL 2>&1 | tail -3
+      d=\"/etc/letsencrypt/live/pangolin.$DOMAIN\"
+      [ -f \"\$d/fullchain.pem\" ] && [ -f \"\$d/privkey.pem\" ] || { echo 'СЕРТ ДАШБОРДА НЕ ВЫДАН' >&2; exit 1; }
+      echo 'сертификат дашборда выдан/актуален'"
+  ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
+done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "сертификат дашборда не выдан на всех нодах — смотрите вывод certbot"
+
 step "Рендер /opt/pangolin и подъём (панель → gerbil/traefik)"
 pids=(); bad=0
 for a in $(node_names); do
@@ -47,16 +79,22 @@ for a in $(node_names); do
     for f in config.yml.tmpl privateConfig.yml.tmpl traefik_config.yml.tmpl docker-compose.yml.tmpl; do
       ncp "$a" "$ROOT/deploy/pangolin/$f" "/opt/pangolin/$f"
     done
-    ncp "$a" "$ROOT/deploy/pangolin/dynamic_config.yml" "/opt/pangolin/config/dynamic/dynamic_config.yml"
+    # Урок 36: домен в шаблонах был захардкожен (321r.ru) и не рендерился вовсе —
+    # у пользователя с другим доменом панель не работала бы вообще. Рендерим $DOMAIN.
+    sed "s/321r\.ru/$DOMAIN/g" "$ROOT/deploy/pangolin/dynamic_config.yml" \
+      | nssh "$a" 'cat > /opt/pangolin/config/dynamic/dynamic_config.yml'
+    sed "s/321r\.ru/$DOMAIN/g" "$ROOT/deploy/pangolin/panel_cert.yml" \
+      | nssh "$a" 'cat > /opt/pangolin/config/dynamic/panel_cert.yml'
     acme=false; [ "$a" = "$ACME_NODE" ] && acme=true
     nssh "$a" "set -e
       cd /opt/pangolin
       APP_PASS=\$(grep '^APP_PASSWORD=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"')
       SEC=\$(grep '^PANGOLIN_SERVER_SECRET=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"')
       sed -e \"s|__APP_DB_PASS__|\$APP_PASS|g\" -e \"s|__SERVER_SECRET__|\$SEC|g\" \
-          -e 's|__EXTERNAL_IP__|$(node_ip "$a")|g' -e 's|__EXIT_NODE__|$a|g' \
+          -e \"s|__EXTERNAL_IP__|$(node_ip "$a")|g\" -e \"s|__EXIT_NODE__|$a|g\" \
+          -e \"s|321r\\.ru|$DOMAIN|g\" \
           -e 's|10\.66\.0\.2|$(node_mesh "$VALKEY_NODE")|g' config.yml.tmpl > config/config.yml
-      sed -e 's|__EMAIL__|$EMAIL|g' -e 's|__ACME__|$acme|g' \
+      sed -e 's|__EMAIL__|$EMAIL|g' -e 's|__ACME__|$acme|g' -e \"s|321r\\.ru|$DOMAIN|g\" \
           -e 's|10\.66\.0\.2|$(node_mesh "$VALKEY_NODE")|g' privateConfig.yml.tmpl > config/privateConfig.yml
       sed -e 's|__EMAIL__|$EMAIL|g' traefik_config.yml.tmpl > config/traefik/traefik_config.yml
       sed -e 's|__MESH_IP__|$(node_mesh "$a")|g' -e 's|__TRUSTED__|$TRUSTED|g' \
@@ -108,10 +146,26 @@ for a in $(node_names); do
 done
 [ "$bad" = 0 ] || warn "не все контейнеры Pangolin поднялись — смотрите вывод выше"
 
+step "Сертификат дашборда: что реально отдаёт traefik"
+# Урок 35: без этой проверки панель «работала» с TRAEFIK DEFAULT CERT, и это видел
+# только человек в браузере. Машинно ловим именно дефолтный серт.
+sleep 5
+for a in $(node_names); do
+  iss="$(nssh "$a" "echo | timeout 8 openssl s_client -connect 127.0.0.1:443 -servername pangolin.$DOMAIN 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null" || true)"
+  case "$iss" in
+    *"TRAEFIK DEFAULT"*) warn "$a: дашборд отдаёт TRAEFIK DEFAULT CERT — смотрите логи certbot и panel_cert.yml" ;;
+    *"issuer="*) ok "$a: сертификат дашборда: ${iss#issuer=}" ;;
+    *) warn "$a: не удалось проверить сертификат дашборда" ;;
+  esac
+done
+
 cat <<EOF
 
-  Pangolin поднят на всех нодах. Осталось руками (V1/00 → docs/pangolin-wildcard.md):
-   1. открыть https://pangolin.$DOMAIN и пройти первичный онбординг (админ + 2FA);
+  Pangolin поднят на всех нодах, сертификат дашборда — Let's Encrypt (certbot).
+  Осталось руками (V1/00 → docs/pangolin-wildcard.md):
+   1. открыть https://pangolin.$DOMAIN и пройти первичный онбординг (админ + 2FA).
+      Код первичной настройки (setup token) — в памятке владельца, а если её нет:
+        docker logs pangolin | grep -A1 "SETUP TOKEN"
    2. ввести EE-лицензию (панель → Settings);
    3. создать сайты cluster-<имя> нод и заложить их агенты (pangolin up site);
    4. ресурсы (komodo/rem/sub) — через панель или API с полным HC-набором.

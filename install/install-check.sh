@@ -105,6 +105,21 @@ for a in $(node_names); do
   nssh "$a" 'printf "  %s: load %s, RAM свободно %sМБ\n" "$(hostname)" "$(cut -d" " -f1-3 /proc/loadavg | cut -d" " -f1)" "$(free -m | awk "/Mem:/{print \$7}")"'
 done
 
+echo "== 13. Сертификат дашборда Pangolin =="
+# Урок 35: панель «работала» с TRAEFIK DEFAULT CERT — видел только человек в браузере.
+if [ -n "${DOMAIN:-}" ] && [ "${DOMAIN:-}" != "<ваш-домен>" ]; then
+  for a in $(node_names); do
+    iss="$(nssh "$a" "echo | timeout 8 openssl s_client -connect 127.0.0.1:443 -servername pangolin.$DOMAIN 2>/dev/null | openssl x509 -noout -issuer 2>/dev/null" || true)"
+    case "$iss" in
+      *"TRAEFIK DEFAULT"*) fail_c "$a: дашборд отдаёт TRAEFIK DEFAULT CERT (certbot/panel_cert.yml?)" ;;
+      *"issuer="*) ok_c "$a: дашборд — валидный сертификат (${iss#issuer=})" ;;
+      *) warn_c "$a: проверить сертификат дашборда не удалось" ;;
+    esac
+  done
+else
+  warn_c "DOMAIN пуст — панель не ставится, сертификат не проверяем"
+fi
+
 echo
 echo "=========================================="
 echo "ИТОГ: ✓ $PASS  ! $WARN  ✗ $FAILN"

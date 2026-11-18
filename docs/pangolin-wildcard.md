@@ -99,8 +99,8 @@ acme:
 ```
 
 `traefik_config.yml` — резолвер `letsencrypt` с `dnsChallenge.provider: cloudflare`
-(для сертификата дашборда) + переменная `CLOUDFLARE_DNS_API_TOKEN` у сервиса traefik
-(API-токен Cloudflare со скоупами `Zone:Read` + `DNS:Edit` — Global API Key не нужен).
+(имя ждёт `config.yml` Pangolin; **сам дашборд с 2026-11-18 берёт файловый серт —
+см. раздел ниже**, ACME traefik под NS-делегированием не работает).
 
 Плюс: `server.secret` одинаковый на всех нодах, общий PostgreSQL и Valkey, уникальные
 `gerbil.base_endpoint`/`exit_node_name`, `trusted-upstreams` со всеми адресами нод.
@@ -127,6 +127,36 @@ scripts/pangolin-wildcard-repair.sh <один из IP A-записей>
 ```bash
 curl -sk --resolve test.<base>:443:<node-ip> https://test.<base>/   # ожидание: 200
 ```
+
+## Дашборд: сертификат через certbot, а не ACME traefik (2026-11-18, находка 35)
+
+**Симптом:** `https://pangolin.<домен>` отдаёт `TRAEFIK DEFAULT CERT`, браузер блокирует;
+в логах traefik — `Unable to obtain ACME certificate ... dns01: time limit exceeded ...
+did not return the expected TXT record`.
+
+**Корень:** NS-делегирование `_acme-challenge.<домен> → dns.<домен>` (оно нужно для
+wildcard `*. <домен>`) перехватывает DNS-01 проверку **всех** имён вида
+`_acme-challenge.*.<домен>` — включая `pangolin`. traefik пишет TXT через API Cloudflare,
+а проверяющий резолвер идёт на `dns.<домен>` (встроенная DNS Pangolin), где этой записи
+нет → отказ. certbot с `--dns-cloudflare` работает — путь проверен масками VPN.
+
+**Лечение (в установщике, `install/pangolin-up.sh`):**
+
+1. `certbot certonly --dns-cloudflare -d pangolin.<домен>` на каждой ноде;
+2. `deploy/pangolin/panel_cert.yml` (`tls.certificates` → `/etc/letsencrypt/live/pangolin.<домен>/…`)
+   кладётся в `config/dynamic/` — traefik берёт серт по SNI;
+3. роутеры дашборда — `tls: {}` **без** `certResolver` (иначе traefik вечно долбит
+   сломанный ACME и тратит лимиты Let's Encrypt);
+4. продление: `certbot.timer` → хук `scripts/panel-cert-reload.sh` дописывает комментарий
+   в `panel_cert.yml` → file provider (watch) перечитывает PEM; тот же хук делает
+   `reload nginx`, чтобы маски VPN (серты `vpn-<нода>`/`tg`) тоже подхватывали
+   продлённый PEM;
+5. в `docker-compose.yml.tmpl` у traefik: `/etc/letsencrypt:/etc/letsencrypt:ro`;
+6. проверка «не TRAEFIK DEFAULT CERT» — в шаге `pangolin` и в `install-check.sh` (§13).
+
+Резолвер `letsencrypt` в `traefik_config.yml` оставлен: его имя ждёт `config.yml`
+Pangolin (`cert_resolver`). На пустых серверах панель открывается сразу с валидным
+сертом — до онбординга и до wildcard Pangolin.
 
 ## Ловушки (уже наступили на них)
 
