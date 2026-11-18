@@ -194,6 +194,7 @@ step_pangolin() { step "Pangolin (доступ к сервисам)"; run_script
 step_komodo()   { step "Komodo (управление серверами)"; run_script komodo-up.sh "Komodo"; }
 step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; run_script remnawave-up.sh "Remnawave+маски"; }
 step_check()    { step "Автоприёмка";          bash "$HERE/install-check.sh"; }
+step_handover() { step "Памятка владельца";    bash "$HERE/handover.sh"; }
 step_harden()   { step "Финальная защита ssh"
   local a
   if [ -n "${USER_SSH_KEY:-}" ]; then
@@ -224,7 +225,7 @@ if [ -n "$MANIFEST_ONLY" ]; then
   exit 0
 fi
 
-STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave check harden)
+STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave check handover harden)
 started=1
 [ -n "$FROM" ] && started=0
 for s in "${STEPS[@]}"; do
