@@ -43,10 +43,15 @@ step "nginx-заглушки маски (9447 http, 8448 ssl) + страница
 for a in $(node_names); do
   nssh "$a" 'command -v nginx >/dev/null || { export DEBIAN_FRONTEND=noninteractive; apt-get install -y -qq nginx >/dev/null; }'
   sed "s/tg\.321r\.ru/tg.$DOMAIN/g" "$H/nginx-mask.conf" | nssh "$a" 'cat > /etc/nginx/sites-enabled/mask'
-  nssh "$a" 'mkdir -p /var/www/mask
+  # Урок: дефолтный сайт nginx лезет на :80, а его держит gerbil Pangolin («bind() to
+  # 0.0.0.0:80 failed»). Заглушке маски :80 не нужен — убираем. И учтите: nginx -t
+  # занятые порты НЕ ловит — проверяем именно старт.
+  nssh "$a" 'rm -f /etc/nginx/sites-enabled/default
+    mkdir -p /var/www/mask
     [ -f /var/www/mask/index.html ] || echo "<html><body>Welcome</body></html>" > /var/www/mask/index.html
     nginx -t >/dev/null 2>&1 || { echo "nginx -t падает (нет сертификатов?)" >&2; exit 1; }
-    systemctl restart nginx'
+    systemctl restart nginx
+    systemctl is-active --quiet nginx || { echo "nginx не стартовал (порт занят?)" >&2; exit 1; }'
   ok "$a: nginx-заглушки на месте"
 done
 
