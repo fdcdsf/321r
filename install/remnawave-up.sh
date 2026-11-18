@@ -65,8 +65,8 @@ else
   nssh "$CTRL" 'set -e
     cd /opt/remnawave
     APP_PASS=$(grep "^APP_PASSWORD=" /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d "\"")
-    SECRET=$(openssl rand -alnum 48)
-    METPASS=$(openssl rand -alnum 20)
+    SECRET=$(openssl rand -hex 24)
+    METPASS=$(openssl rand -hex 10)
     cat > .env <<EOF
 APP_PORT=3000
 METRICS_PORT=3001
