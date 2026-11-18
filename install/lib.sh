@@ -16,6 +16,11 @@ APPS=("${APPS[@]:-}")
 CONTROL="${CONTROL:-${NODES[1]%% *}}"
 VIP="${VIP:-10.66.0.99}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
+# Урок: каждый под-скрипт перечитывает инвентарь; если указанного ключа нет
+# (например $HOME/.ssh/id_ed25519 на сервере) — берём ключ кластера.
+if [ ! -f "$SSH_KEY" ] && [ -f "$SECRETS/id_cluster" ]; then
+  SSH_KEY="$SECRETS/id_cluster"
+fi
 PROFILE="${PROFILE:-L}"
 BACKUP_WINDOWS="${BACKUP_WINDOWS:-}"
 
