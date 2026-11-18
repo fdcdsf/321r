@@ -62,7 +62,7 @@ else
       JWT=$(curl -s -X POST http://127.0.0.1:9120/auth/login/LoginLocalUser \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"admin\",\"password\":\"$PW\"}" \
-        | python3 -c "import sys,json;print(json.load(sys.stdin).get(\"jwt\",\"\"))" 2>/dev/null || true)
+        | python3 -c "import sys,json;d=json.load(sys.stdin);d=d.get(\"data\") or d;print(d.get(\"jwt\",\"\"))" 2>/dev/null || true)
       [ -n "$JWT" ] && break
       sleep 5
     done
@@ -70,7 +70,7 @@ else
     curl -s -X POST http://127.0.0.1:9120/write/CreateOnboardingKey \
       -H "Authorization: $JWT" -H "Content-Type: application/json" \
       -d "{\"name\":\"321r-cluster\",\"expires\":0,\"tags\":[],\"privileged\":true,\"copy_server\":\"\",\"create_builder\":false}" \
-      | python3 -c "import sys,json;open(\"/etc/db/secrets/komodo-onboarding.key\",\"w\").write(json.load(sys.stdin)[\"private_key\"])"
+      | python3 -c "import sys,json;d=json.load(sys.stdin);d=d.get(\"data\") or d;open(\"/etc/db/secrets/komodo-onboarding.key\",\"w\").write(d[\"private_key\"])"
     chmod 600 /etc/db/secrets/komodo-onboarding.key'
   ok "ключ onboarding создан"
 fi
@@ -102,11 +102,12 @@ nssh "$CTRL" 'set -e
   PW=$(grep KOMODO_INIT_ADMIN_PASSWORD= /etc/db/secrets/komodo.env | cut -d= -f2-)
   JWT=$(curl -s -X POST http://127.0.0.1:9120/auth/login/LoginLocalUser \
     -H "Content-Type: application/json" \
-    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c "import sys,json;print(json.load(sys.stdin).get(\"jwt\",\"\"))")
+    -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c "import sys,json;d=json.load(sys.stdin);d=d.get(\"data\") or d;print(d.get(\"jwt\",\"\"))" 2>/dev/null || true)
   curl -s -X POST http://127.0.0.1:9120/read/ListServers -H "Authorization: $JWT" -H "Content-Type: application/json" -d "{}" \
     | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
+d = d.get(\"data\") or d
 s = d if isinstance(d, list) else d.get(\"servers\", [])
 print(\"  серверы:\", [(x.get(\"name\"), x.get(\"status\", \"?\")) for x in s])" 2>/dev/null \
     || echo "  список серверов не получен (перепроверьте periphery)"' || warn "список серверов не получен (проверьте periphery)"
