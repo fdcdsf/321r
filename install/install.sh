@@ -45,7 +45,7 @@ wizard() {
   read -rp "Оставить как есть? [Y/n]: " x
   local apps=()
   if [ "${x:-y}" = "y" ] || [ "${x:-Y}" = "Y" ]; then
-    apps=("pangolin pg 5432 a,b,c" "remnawave pg 5433 a,b,c" "komodo mongo 27017 a,b,c arbiter=a")
+    apps=("pangolin pg 5432 a,b,c" "remnawave pg 5433 a,b,c" "komodo mongo 27017 b,c arbiter=a")
   else
     echo "Вводите по одному: имя engine(pg|mongo) порт placement (напр. myapp pg 5434 a,b,c). Пустая строка = конец."
     while read -rp "> " line; do [ -z "$line" ] && break; apps+=("$line"); done
@@ -54,6 +54,7 @@ wizard() {
   read -rp "Chat id владельца (от @userinfobot): " TG_CHAT_ID
   read -rp "Домен (можно пусто, если ставим только ядро): " DOMAIN
   read -rp "Cloudflare API-токен (можно пусто): " CF_API_TOKEN
+  read -rp "Ваш публичный ssh-ключ (пусто = оставить парольный вход): " USER_SSH_KEY
   read -rp "Профиль ресурсов S/M/L [L]: " x; PROFILE="${x:-L}"
   {
     echo "# Сгенерировано мастером $(date -u +%F). Правьте — установщик перечитывает."
@@ -69,6 +70,7 @@ wizard() {
     echo "TG_CHAT_ID=\"$TG_CHAT_ID\""
     echo "DOMAIN=\"$DOMAIN\""
     echo "CF_API_TOKEN=\"$CF_API_TOKEN\""
+    echo "USER_SSH_KEY=\"$USER_SSH_KEY\""
     echo "PROFILE=\"$PROFILE\""
     echo "BACKUP_WINDOWS=\"\""
     echo "SSH_KEY=\"\$HOME/.ssh/id_ed25519\""
@@ -158,23 +160,36 @@ render_manifest() {
   ok "манифест cluster.yml разложен по нодам"
 }
 
-step_mesh()     { step "Меш AmneziaWG";        "$HERE/mesh-up.sh"; }
-step_swarm()    { step "Docker Swarm";         "$HERE/swarm-up.sh"; }
-step_db()       { step "Слой баз данных";      "$HERE/db-up.sh"; }
-step_backup()   { step "Бэкапы 3-2-1";         "$HERE/backup-up.sh"; }
-step_tgbot()    { step "Telegram-бот и дозор"; "$HERE/tgbot-up.sh"; }
-step_check()    { step "Автоприёмка";          "$HERE/install-check.sh"; }
+step_mesh()     { step "Меш AmneziaWG";        bash "$HERE/mesh-up.sh"; }
+step_swarm()    { step "Docker Swarm";         bash "$HERE/swarm-up.sh"; }
+step_db()       { step "Слой баз данных";      bash "$HERE/db-up.sh"; }
+step_backup()   { step "Бэкапы 3-2-1";         bash "$HERE/backup-up.sh"; }
+step_tgbot()    { step "Telegram-бот и дозор"; bash "$HERE/tgbot-up.sh"; }
+step_dns()      { step "DNS и сертификаты";    bash "$HERE/dns-up.sh"; }
+step_pangolin() { step "Pangolin (доступ к сервисам)"; bash "$HERE/pangolin-up.sh"; }
+step_komodo()   { step "Komodo (управление серверами)"; bash "$HERE/komodo-up.sh"; }
+step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; bash "$HERE/remnawave-up.sh"; }
+step_check()    { step "Автоприёмка";          bash "$HERE/install-check.sh"; }
 step_harden()   { step "Финальная защита ssh"
   local a
-  for a in $(node_names); do
-    nssh "$a" "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
-      sed -i 's/^#\\?KbdInteractiveAuthentication .*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
-      grep -q '^Port 2222' /etc/ssh/sshd_config || echo 'Port 2222' >> /etc/ssh/sshd_config
-      grep -q '^Port 22$' /etc/ssh/sshd_config && sed -i '/^Port 22$/d' /etc/ssh/sshd_config
-      systemctl reload sshd 2>/dev/null || systemctl reload ssh
-      ufw --force delete allow 22/tcp >/dev/null 2>&1 || true"
-    ok "$a: парольный вход отключён, порт 22 закрыт"
-  done
+  if [ -n "${USER_SSH_KEY:-}" ]; then
+    for a in $(node_names); do
+      nssh "$a" "grep -qF '$USER_SSH_KEY' /root/.ssh/authorized_keys 2>/dev/null || echo '$USER_SSH_KEY' >> /root/.ssh/authorized_keys"
+    done
+    ok "ваш публичный ключ заложен на все ноды"
+    for a in $(node_names); do
+      nssh "$a" "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sed -i 's/^#\\?KbdInteractiveAuthentication .*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
+        sed -i 's/^PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+        grep -q '^Port 22$' /etc/ssh/sshd_config && sed -i '/^Port 22$/d' /etc/ssh/sshd_config
+        systemctl reload sshd 2>/dev/null || systemctl reload ssh
+        ufw --force delete allow 22/tcp >/dev/null 2>&1 || true"
+      ok "$a: парольный вход отключён, порт 22 закрыт"
+    done
+  else
+    warn "ваш публичный ключ не задан — парольный вход ОСТАЁТСЯ (безопасность ниже)."
+    warn "Ваш ключ можно добавить позже в inventory (USER_SSH_KEY) и повторить: --from=harden"
+  fi
 }
 
 if [ -n "$MANIFEST_ONLY" ]; then
@@ -183,7 +198,7 @@ if [ -n "$MANIFEST_ONLY" ]; then
   exit 0
 fi
 
-STEPS=(preflight base mesh swarm db backup tgbot check harden)
+STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave check harden)
 started=1
 [ -n "$FROM" ] && started=0
 for s in "${STEPS[@]}"; do

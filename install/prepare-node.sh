@@ -75,11 +75,12 @@ EOF
 sysctl -qw vm.swappiness=10
 grep -q 'vm.swappiness' /etc/sysctl.d/99-321r.conf 2>/dev/null || echo 'vm.swappiness=10' > /etc/sysctl.d/99-321r.conf
 
-# --- 5) ssh: порт 2222 (пароль отключается финальным шагом harden!) ---
+# --- 5) ssh: порт 2222 (пароль НЕ трогаем — отключает финальный шаг harden,
+#        и только если заложен ключ пользователя; урок: прерванная установка
+#        без пароля = потеря доступа) ---
 SSHD=/etc/ssh/sshd_config
 grep -q '^Port 2222' "$SSHD" || echo 'Port 2222' >> "$SSHD"
 grep -q '^Port 22$' "$SSHD" || echo 'Port 22' >> "$SSHD"    # временно, пока ключевой вход не подтверждён
-grep -q '^PermitRootLogin' "$SSHD" && sed -i 's/^PermitRootLogin .*/PermitRootLogin prohibit-password/' "$SSHD" || echo 'PermitRootLogin prohibit-password' >> "$SSHD"
 grep -q '^MaxAuthTries' "$SSHD" && sed -i 's/^MaxAuthTries .*/MaxAuthTries 3/' "$SSHD" || echo 'MaxAuthTries 3' >> "$SSHD"
 systemctl reload sshd 2>/dev/null || systemctl reload ssh
 

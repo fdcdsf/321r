@@ -24,6 +24,7 @@ rm -rf "$TARGET" /tmp/321r-master
 curl -fsSL "$REPO_TARBALL" | tar xz -C /tmp
 mv /tmp/321r-master "$TARGET"
 cd "$TARGET"
+chmod +x install/*.sh   # тарбол GitHub может прийти без битов выполнения
 
 # ВАЖНО: при «curl | bash» stdin — это пайп, а не терминал (урок: мастер-вопросы
 # читать не откуда). Переключаем ввод мастера на настоящий терминал пользователя.
