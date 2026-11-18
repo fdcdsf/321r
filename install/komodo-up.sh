@@ -49,19 +49,29 @@ nssh "$CTRL" 'docker stack deploy -c /tmp/komodo-core.yaml komodo' 2>&1 | sed 's
 ok "стек выкачен"
 
 step "Ожидание Core и ключ onboarding"
-for i in $(seq 1 30); do
-  nssh "$CTRL" 'curl -sf -o /dev/null http://127.0.0.1:9120/' && break
+# Урок: первый старт = pull образа с ghcr — ждать надо дольше и ПРОВЕРЯТЬ результат.
+up=""
+for i in $(seq 1 60); do
+  if nssh "$CTRL" 'curl -sf -o /dev/null http://127.0.0.1:9120/'; then up=1; break; fi
   sleep 5
 done
+[ -n "$up" ] || fail "Komodo Core не поднялся за 5 мин — смотрите: docker service logs komodo_core"
+ok "Core отвечает"
 if nssh "$CTRL" '[ -s /etc/db/secrets/komodo-onboarding.key ]'; then
   ok "ключ onboarding уже есть"
 else
   nssh "$CTRL" 'set -e
     PW=$(grep KOMODO_INIT_ADMIN_PASSWORD= /etc/db/secrets/komodo.env | cut -d= -f2-)
-    JWT=$(curl -s -X POST http://127.0.0.1:9120/auth/login/LoginLocalUser \
-      -H "Content-Type: application/json" \
-      -d "{\"username\":\"admin\",\"password\":\"$PW\"}" | python3 -c "import sys,json;print(json.load(sys.stdin).get(\"jwt\",\"\"))")
-    [ -n "$JWT" ] || { echo "не удалось войти в Core" >&2; exit 1; }
+    JWT=""
+    for t in 1 2 3; do
+      JWT=$(curl -s -X POST http://127.0.0.1:9120/auth/login/LoginLocalUser \
+        -H "Content-Type: application/json" \
+        -d "{\"username\":\"admin\",\"password\":\"$PW\"}" \
+        | python3 -c "import sys,json;print(json.load(sys.stdin).get(\"jwt\",\"\"))" 2>/dev/null || true)
+      [ -n "$JWT" ] && break
+      sleep 5
+    done
+    [ -n "$JWT" ] || { echo "не удалось войти в Core (пустой ответ API)" >&2; exit 1; }
     curl -s -X POST http://127.0.0.1:9120/write/CreateOnboardingKey \
       -H "Authorization: $JWT" -H "Content-Type: application/json" \
       -d "{\"name\":\"321r-cluster\",\"expires\":0,\"tags\":[],\"privileged\":true,\"copy_server\":\"\",\"create_builder\":false}" \
@@ -103,7 +113,8 @@ nssh "$CTRL" 'set -e
 import sys, json
 d = json.load(sys.stdin)
 s = d if isinstance(d, list) else d.get(\"servers\", [])
-print(\"  серверы:\", [(x.get(\"name\"), x.get(\"status\", \"?\")) for x in s])"' || warn "список серверов не получен (проверьте periphery)"
+print(\"  серверы:\", [(x.get(\"name\"), x.get(\"status\", \"?\")) for x in s])" 2>/dev/null \
+    || echo "  список серверов не получен (перепроверьте periphery)"' || warn "список серверов не получен (проверьте periphery)"
 
 cat <<EOF
 
