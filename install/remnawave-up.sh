@@ -12,20 +12,32 @@ GW_MESH="$(node_mesh "$CTRL")"
 H="$ROOT/deploy/harvest"
 
 step "Сертификаты маскировки (DNS-01, per node: vpn-<имя> + tg)"
+# Урок: certbot в базовый набор не входит; без сертификатов nginx маски не стартует.
+for a in $(node_names); do
+  nssh "$a" 'command -v certbot >/dev/null 2>&1 || {
+    for i in $(seq 1 30); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 5; done
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 install -y -qq certbot python3-certbot-dns-cloudflare >/dev/null; }'
+  ok "$a: certbot готов"
+done
 pids=(); bad=0
 for a in $(node_names); do
   (
     nssh "$a" "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
-        -d vpn-$a.$DOMAIN -d tg.$DOMAIN --non-interactive --agree-tos -m admin@$DOMAIN >/dev/null 2>&1 \
-      || certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
-        -d vpn-$a.$DOMAIN -d tg.$DOMAIN --non-interactive --agree-tos --register-unsafely-without-email >/dev/null 2>&1
-    d=\$(ls -d /etc/letsencrypt/live/vpn-$a.* 2>/dev/null | head -1)
-    [ -n \"\$d\" ] && ln -sfn \"\$d\" /etc/letsencrypt/live/mask
-    echo \"сертификат: \$d\""
+        -d vpn-$a.$DOMAIN -d tg.$DOMAIN --non-interactive --agree-tos -m admin@$DOMAIN 2>&1 | tail -4
+      d=\$(ls -d /etc/letsencrypt/live/vpn-$a.* 2>/dev/null | head -1)
+      if [ -n \"\$d\" ]; then
+        ln -sfn \"\$d\" /etc/letsencrypt/live/mask
+        echo \"сертификат: \$d\"
+      else
+        echo \"СЕРТИФИКАТ НЕ ВЫДАН — nginx маски не будет запущен\" >&2
+        exit 1
+      fi"
   ) 2>&1 | sed "s/^/[$a] /" &
   pids+=($!)
 done
 for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "без сертификатов маски не работают — смотрите вывод certbot выше"
 
 step "nginx-заглушки маски (9447 http, 8448 ssl) + страница-приманка"
 for a in $(node_names); do
@@ -33,6 +45,7 @@ for a in $(node_names); do
   sed "s/tg\.321r\.ru/tg.$DOMAIN/g" "$H/nginx-mask.conf" | nssh "$a" 'cat > /etc/nginx/sites-enabled/mask'
   nssh "$a" 'mkdir -p /var/www/mask
     [ -f /var/www/mask/index.html ] || echo "<html><body>Welcome</body></html>" > /var/www/mask/index.html
+    nginx -t >/dev/null 2>&1 || { echo "nginx -t падает (нет сертификатов?)" >&2; exit 1; }
     systemctl restart nginx'
   ok "$a: nginx-заглушки на месте"
 done
