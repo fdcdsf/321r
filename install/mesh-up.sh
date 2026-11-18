@@ -15,6 +15,7 @@ for a in $(node_names); do
     nssh "$a" 'set -e
       for i in $(seq 1 60); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 10; done
       apt_retry() { local n; for n in $(seq 1 10); do "$@" && return 0; echo "  apt занят — жду 15 с"; sleep 15; done; return 1; }
+      APTQ="apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10"
       mkdir -p /etc/apt/keyrings
       rm -f /etc/apt/keyrings/amnezia.gpg   # иначе gpg спросит «перезаписать?» через /dev/tty
       curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75C9DD72C799870E310542E24166F2C257290828" \
@@ -22,8 +23,8 @@ for a in $(node_names); do
       echo "deb [signed-by=/etc/apt/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" \
         > /etc/apt/sources.list.d/amnezia.list
       export DEBIAN_FRONTEND=noninteractive
-      apt_retry apt-get update -qq
-      apt_retry apt-get install -y -qq amneziawg >/dev/null
+      apt_retry $APTQ update -qq
+      apt_retry $APTQ install -y -qq amneziawg >/dev/null
       modprobe amneziawg'
     echo "AmneziaWG установлен"
   ) 2>&1 | sed "s/^/[$a] /" &

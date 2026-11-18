@@ -33,8 +33,9 @@ export DEBIAN_FRONTEND=noninteractive
 # ретраим (урок полевого теста: «Could not get lock /var/lib/dpkg/lock-frontend»).
 for i in $(seq 1 60); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 10; done
 apt_retry() { local n; for n in $(seq 1 10); do "$@" && return 0; echo "  apt занят — жду 15 с (попытка $n)"; sleep 15; done; return 1; }
-apt_retry apt-get update -qq
-apt_retry apt-get install -y -qq ca-certificates curl gnupg git jq python3 ufw fail2ban \
+APTQ="apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10"
+apt_retry $APTQ update -qq
+apt_retry $APTQ install -y -qq ca-certificates curl gnupg git jq python3 ufw fail2ban \
   dkms "linux-headers-$(uname -r)" tar gzip util-linux restic >/dev/null
 if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
@@ -44,8 +45,8 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
 https://download.docker.com/linux/$(. /etc/os-release && echo "$ID") $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
     > /etc/apt/sources.list.d/docker.list
-  apt_retry apt-get update -qq
-  apt_retry apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
+  apt_retry $APTQ update -qq
+  apt_retry $APTQ install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
   systemctl enable --now docker
 fi
 docker version --format '  docker {{.Server.Version}} ✓'
