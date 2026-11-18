@@ -20,10 +20,14 @@ for a in $(node_names); do
   ok "$a: nodes.map собран из инвентаря"
 done
 
-# 2) db-prep на каждой ноде (VIP, ufw контейнеров, каталоги, пред-pull образов)
+# 2) db-prep на всех нодах ПАРАЛЛЕЛЬНО (VIP, ufw контейнеров, каталоги, пред-pull образов)
+pids=(); bad=0
 for a in $(node_names); do
-  nssh "$a" '/usr/local/bin/db-prep.sh' | sed 's/^/  /'
+  ( nssh "$a" '/usr/local/bin/db-prep.sh' ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "db-prep не прошёл на всех нодах"
 
 # 3) реестр приложений → на все ноды (пароли db-add генерирует сам).
 #    Существующий реестр НЕ перезаписываем: живой кластер мог настроить placement иначе!

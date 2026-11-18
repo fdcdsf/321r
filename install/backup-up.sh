@@ -30,16 +30,22 @@ else
   warn "нет TG_BOT_TOKEN — алерты и бот работать не будут (добавьте в inventory и перезапустите шаг)"
 fi
 
-# 3) репозитории: своя копия живёт на 2 других нодах (sftp по мешу)
+# 3) репозитории: своя копия живёт на 2 других нодах (sftp по мешу) — все пары параллельно
+pids=(); bad=0
 for a in $(node_names); do
   for b in $(node_names); do
     [ "$b" = "$a" ] && continue
-    nssh "$a" "set -a; . /etc/db/secrets/restic.env; set +a
-      restic -r sftp:root@$(node_mesh "$b"):/var/lib/backup-repos/$a snapshots >/dev/null 2>&1 \
-        || restic -r sftp:root@$(node_mesh "$b"):/var/lib/backup-repos/$a init >/dev/null"
+    (
+      nssh "$a" "set -a; . /etc/db/secrets/restic.env; set +a
+        restic -r sftp:root@$(node_mesh "$b"):/var/lib/backup-repos/$a snapshots >/dev/null 2>&1 \
+          || restic -r sftp:root@$(node_mesh "$b"):/var/lib/backup-repos/$a init >/dev/null"
+    ) 2>&1 | sed "s/^/[$a→$b] /" &
+    pids+=($!)
   done
-  ok "$a: репозитории на 2 чужих нодах инициализированы"
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "репозитории restic инициализированы не везде"
+for a in $(node_names); do ok "$a: репозитории на 2 чужих нодах инициализированы"; done
 
 # 4) cron: окно бэкапа своё у каждой ноды (не копимся одновременно), остальное общее
 for a in $(node_names); do

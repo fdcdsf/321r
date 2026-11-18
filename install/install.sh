@@ -87,16 +87,19 @@ source "$HERE/lib.sh"
 
 # ---------- шаги ----------
 step_preflight() {
-  step "Предпроверки"
-  [ -f "$SSH_KEY" ] || fail "нет ключа $SSH_KEY (создайте: ssh-keygen -t ed25519 и положите публичный на серверы — см. V1/00)"
-  ok "локальный ключ: $SSH_KEY"
-  detect_all_ports
+  step "Предпроверки и доступ к серверам"
+  if [ -f "$SSH_KEY" ]; then
+    ok "ключ доступа: $SSH_KEY"
+  else
+    gen_cluster_key
+    ok "создан ключ кластера: $SECRETS/id_cluster"
+  fi
+  ensure_access    # где ключа ещё нет — спросит пароль и заложит ключ (разово)
   local a bad=0
   for a in $(node_names); do
-    if [ "${NPORT[$a]}" = 0 ]; then warn "$a ($(node_ip "$a")): нет ssh-доступа ключом!"; bad=1; continue; fi
     local virt cont ram ker
-    virt="$(nssh "$a" 'systemd-detect-virt --vm 2>/dev/null | head -1')"
-    cont="$(nssh "$a" 'systemd-detect-virt --container 2>/dev/null | head -1')"
+    virt="$(nssh "$a" 'systemd-detect-virt --vm 2>/dev/null | head -1' || true)"
+    cont="$(nssh "$a" 'systemd-detect-virt --container 2>/dev/null | head -1' || true)"
     ram="$(nssh "$a" 'free -m | awk "/Mem:/{print \$2}"')"
     ker="$(nssh "$a" 'uname -r')"
     if [ -n "$cont" ] && [ "$cont" != "none" ]; then
@@ -111,18 +114,22 @@ step_preflight() {
 }
 
 step_base() {
-  step "Базовая подготовка нод (пакеты, docker, ssh, firewall)"
-  local a
+  step "Базовая подготовка нод (все сервера одновременно)"
+  local a pids=() pid bad=0
   for a in $(node_names); do
-    ncp "$a" -r "$ROOT/scripts/." "/usr/local/bin/"
-    nssh "$a" 'chmod +x /usr/local/bin/*.sh'
-    ncp "$a" "$ROOT/scripts/tgbot.py" "/usr/local/bin/tgbot.py"
-    for u in "$ROOT"/systemd/*; do ncp "$a" "$u" "/etc/systemd/system/$(basename "$u")"; done
-    nssh "$a" "bash -s -- $a $(node_mesh "$a") $VIP $PROFILE" < "$HERE/prepare-node.sh"
-    ok "$a: базовая подготовка сделана"
+    (
+      ncp "$a" -r "$ROOT/scripts/." "/usr/local/bin/"
+      nssh "$a" 'chmod +x /usr/local/bin/*.sh'
+      for u in "$ROOT"/systemd/*; do ncp "$a" "$u" "/etc/systemd/system/$(basename "$u")"; done
+      nssh "$a" "bash -s -- $a $(node_mesh "$a") $VIP $PROFILE" < "$HERE/prepare-node.sh"
+    ) 2>&1 | sed "s/^/[$a] /" &
+    pids+=($!)
   done
+  for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+  [ "$bad" = 0 ] || fail "базовая подготовка не на всех нодах — смотрите вывод выше"
   detect_all_ports   # теперь все ноды отвечают на 2222
   render_manifest
+  ok "базовая подготовка завершена на всех нодах"
 }
 
 render_manifest() {

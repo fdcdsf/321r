@@ -81,6 +81,51 @@ ncp() { # ncp <alias> <опции/файлы...> <куда на ноде>  (по
 }
 
 # ---------- ключ межнодового доступа (ноды ходят друг к другу сами) ----------
+my_alias() { # какой алиас из инвентаря — ЭТОТ сервер (по его публичному IP)
+  local ips a
+  ips="$(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1)"
+  for a in $(node_names); do
+    grep -qw "$(node_ip "$a")" <<<"$ips" && { echo "$a"; return; }
+  done
+  echo ""
+}
+
+gen_cluster_key() {
+  mkdir -p "$SECRETS"; chmod 700 "$SECRETS"
+  [ -f "$SECRETS/id_cluster" ] || ssh-keygen -t ed25519 -N "" -f "$SECRETS/id_cluster" -C "321r-cluster" >/dev/null
+  [ -f "$SSH_KEY" ] || SSH_KEY="$SECRETS/id_cluster"   # мастер-режим: ходим ключом кластера
+}
+
+ensure_access() {
+  # Ключевой доступ ко ВСЕМ нодам. Нет ключа — заложим по паролю (разово, sshpass):
+  # так и задумано — «ввёл пароли серверов и пошло».
+  local a ip pw me
+  gen_cluster_key
+  me="$(my_alias)"
+  for a in $(node_names); do
+    if [ "$a" = "$me" ]; then
+      mkdir -p /root/.ssh; chmod 700 /root/.ssh
+      grep -qF '321r-cluster' /root/.ssh/authorized_keys 2>/dev/null || cat "$SECRETS/id_cluster.pub" >> /root/.ssh/authorized_keys
+      chmod 600 /root/.ssh/authorized_keys
+      detect_port "$a"
+      ok "$a (этот сервер): ключ кластера заложен локально"
+      continue
+    fi
+    detect_port "$a"
+    [ "${NPORT[$a]:-0}" != 0 ] && { ok "$a: доступ ключом уже есть"; continue; }
+    ip="$(node_ip "$a")"
+    command -v sshpass >/dev/null 2>&1 || fail "нет доступа к $ip, а sshpass для входа по паролю не установлен (apt-get install sshpass)"
+    read -rsp "  Пароль root@$ip (Enter = пропустить): " pw; echo
+    [ -n "$pw" ] || fail "без пароля доступ к $ip не получить"
+    sshpass -p "$pw" ssh -p 22 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "root@$ip" \
+      'mkdir -p /root/.ssh && chmod 700 /root/.ssh
+       grep -qF "321r-cluster" /root/.ssh/authorized_keys 2>/dev/null || cat >> /root/.ssh/authorized_keys
+       chmod 600 /root/.ssh/authorized_keys' < "$SECRETS/id_cluster.pub"
+    detect_port "$a"
+    [ "${NPORT[$a]:-0}" != 0 ] && ok "$a: ключ заложен по паролю" || fail "$a: ключ заложили, но ssh не отвечает"
+  done
+}
+
 setup_cluster_key() {
   mkdir -p "$SECRETS"; chmod 700 "$SECRETS"
   [ -f "$SECRETS/id_cluster" ] || ssh-keygen -t ed25519 -N "" -f "$SECRETS/id_cluster" -C "321r-cluster" >/dev/null

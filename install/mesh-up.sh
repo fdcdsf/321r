@@ -4,24 +4,33 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
-# 1) AmneziaWG на каждую ноду (DKMS-сборка 5–15 минут; урок: нужна полная VM и ядро ≥6.7)
+# 1) AmneziaWG на все ноды ПАРАЛЛЕЛЬНО (DKMS-сборка 5–15 минут; урок: нужна полная VM и ядро ≥6.7)
+pids=(); bad=0
 for a in $(node_names); do
   if nssh "$a" 'command -v awg-quick >/dev/null'; then
     ok "$a: AmneziaWG уже установлен"
     continue
   fi
-  echo "  $a: ставлю AmneziaWG (это долго — DKMS-сборка)..."
-  nssh "$a" 'set -e
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75C9DD72C799870E310542E24166F2C257290828" \
-      | gpg --dearmor -o /etc/apt/keyrings/amnezia.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" \
-      > /etc/apt/sources.list.d/amnezia.list
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -qq && apt-get install -y -qq amneziawg >/dev/null
-    modprobe amneziawg'
-  ok "$a: AmneziaWG установлен"
+  (
+    nssh "$a" 'set -e
+      for i in $(seq 1 60); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 10; done
+      apt_retry() { local n; for n in $(seq 1 10); do "$@" && return 0; echo "  apt занят — жду 15 с"; sleep 15; done; return 1; }
+      mkdir -p /etc/apt/keyrings
+      rm -f /etc/apt/keyrings/amnezia.gpg   # иначе gpg спросит «перезаписать?» через /dev/tty
+      curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75C9DD72C799870E310542E24166F2C257290828" \
+        | gpg --dearmor -o /etc/apt/keyrings/amnezia.gpg
+      echo "deb [signed-by=/etc/apt/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" \
+        > /etc/apt/sources.list.d/amnezia.list
+      export DEBIAN_FRONTEND=noninteractive
+      apt_retry apt-get update -qq
+      apt_retry apt-get install -y -qq amneziawg >/dev/null
+      modprobe amneziawg'
+    echo "AmneziaWG установлен"
+  ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "AmneziaWG встал не на всех нодах — смотрите вывод выше (урок: ядро ≥6.7, полная VM)"
 
 # 2) общий секрет обфускации (HPK) — один на весь кластер (урок: разные = линк молчит).
 #    Если ноды уже в меше — берём ИХ HPK (иначе живой меш перестанет сходиться!).
