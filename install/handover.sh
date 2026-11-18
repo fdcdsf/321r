@@ -18,8 +18,8 @@ RW_PG="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/remnawave.env 
 K_ADMIN="$(nssh "$CTRL" "grep '^KOMODO_INIT_ADMIN_PASSWORD=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_JWT="$(nssh "$CTRL" "grep '^KOMODO_JWT_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_WEBHOOK="$(nssh "$CTRL" "grep '^KOMODO_WEBHOOK_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
-K_COREKEY="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-keys/core.key')"
-K_COREPUB="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-keys/core.pub')"
+K_CORE_KEY="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-keys/core.key')"
+K_CORE_PUB="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-keys/core.pub')"
 K_ONBOARD="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-onboarding.key')"
 RESTIC="$(nssh "$CTRL" "grep '^RESTIC_PASSWORD=' /etc/db/secrets/restic.env | cut -d= -f2- | tr -d '\"'")"
 CLUSTER_KEY="$(cat "$SECRETS/id_cluster" 2>/dev/null || echo '(нет)')"
@@ -30,7 +30,7 @@ ok "секреты собраны (значения — только в файл
 step "Памятка владельца"
 cat > "$OUT" <<EOF
 ================================================================================
- 321r · ПАМЯТКА ВЛАДЕЛЬЦА — $(date -u +%F %H:%M) UTC
+ 321r · ПАМЯТКА ВЛАДЕЛЬЦА — $(date -u '+%F %H:%M') UTC
 ================================================================================
 ⚠ ВСЁ НИЖЕ — СЕКРЕТЫ. Сохраните в надёжном месте (менеджер паролей / печать).
 ⚠ Не выкладывайте в git, облака и чаты. Утрата = пересоздание с нуля.
@@ -65,7 +65,7 @@ $CLUSTER_KEY
   Webhook:     $K_WEBHOOK
   Ключ Core X25519 (pkcs8, БЕРЕГИТЕ — идентичность Core):
 $K_CORE_KEY
-  Публичный ключ Core: $K_COREPUB
+  Публичный ключ Core: $K_CORE_PUB
   Onboarding-key периферии: $K_ONBOARD
 
 --- 6. REMNAWAVE -------------------------------------------------------------
