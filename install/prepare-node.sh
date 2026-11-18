@@ -89,8 +89,10 @@ grep -q '^MaxAuthTries' "$SSHD" && sed -i 's/^MaxAuthTries .*/MaxAuthTries 3/' "
 if systemctl is-active ssh.socket >/dev/null 2>&1 || systemctl is-enabled ssh.socket >/dev/null 2>&1; then
   systemctl disable --now ssh.socket >/dev/null 2>&1 || true
   systemctl enable --now ssh >/dev/null 2>&1 || true
+  systemctl restart ssh        # при переходе с socket-активации — именно restart (урок)
+else
+  systemctl reload sshd 2>/dev/null || systemctl reload ssh
 fi
-systemctl reload sshd 2>/dev/null || systemctl reload ssh
 # ГРОМКАЯ проверка: если 2222 не слушается — это ломает весь кластер, стоп!
 for i in $(seq 1 10); do
   ss -tln 2>/dev/null | grep -q ':2222 ' && break
