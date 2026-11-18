@@ -80,12 +80,33 @@ EOF
   ok "$a: repair после старта + каждые 30 мин"
 done
 
+step "Второй проход: gerbil/traefik после оздоровления панели"
+# Урок: compose с depends_on: service_healthy НЕ ретраит: если healthcheck на момент
+# первого up ещё не прошёл — gerbil/traefik не стартуют никогда. Сначала ждём панель.
+for a in $(node_names); do
+  st=""
+  for i in $(seq 1 36); do
+    st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+    [ "$st" = "healthy" ] && break
+    sleep 5
+  done
+  nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null 2>&1
+  ok "$a: панель $st — стек пересобран"
+done
+
 step "Проверка"
 sleep 10
+bad=0
 for a in $(node_names); do
-  st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null || echo нет')"
-  ok "$a: pangolin — $st"
+  line=""
+  for c in pangolin gerbil traefik; do
+    st="$(nssh "$a" "docker inspect -f '{{.State.Status}}' $c 2>/dev/null" || true)"
+    line="$line $c=${st:-нет}"
+    [ "$st" = "running" ] || bad=1
+  done
+  ok "$a:$line"
 done
+[ "$bad" = 0 ] || warn "не все контейнеры Pangolin поднялись — смотрите вывод выше"
 
 cat <<EOF
 
