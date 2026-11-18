@@ -63,11 +63,12 @@ for row in "${APPS[@]}"; do
   app="$(app_name "$row")"; engine="$(app_engine "$row")"
   primary="$(app_placement "$row" | awk '{print $1}')"
   dir="pg-$app"; [ "$engine" = "mongo" ] && dir="mongo-$app"
-  # «развёрнуто» = данные есть на ВСЕХ узлах placement (урок: доделывать частично
-  # развёрнутое — ровно так же через повторный db-add)
+  # «развёрнуто» = контейнеры запущены на ВСЕХ узлах placement. Каталоги данных
+  # НЕ годятся как признак (урок: db-add создаёт их заранее везде → недоделка
+  # считалась готовой). Частично развёрнутое доделывается повторным db-add.
   deployed=1
   for a in $(app_placement "$row"); do
-    if ! nssh "$a" "[ -d /var/lib/dbdata/$dir ]"; then deployed=0; break; fi
+    if ! nssh "$a" "docker ps --format '{{.Names}}' | grep -qx $dir"; then deployed=0; break; fi
   done
   if [ "$deployed" = 1 ]; then
     ok "$app: уже развёрнут — пропускаю"

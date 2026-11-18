@@ -49,8 +49,9 @@ app_row() { # $1=имя приложения
 backup_window() { # $1=alias -> HH:MM (по умолчанию разнос по порядку: 03:10, 03:40, 04:10...)
   local w; w="$(grep -oE "(^| )$1=[0-9:]+" <<<"$BACKUP_WINDOWS" | awk -F= '{print $2}')"
   if [ -n "$w" ]; then echo "$w"; return; fi
-  local i=0 n; for n in $(node_names); do [ "$n" = "$1" ] && break; i=$((i+1)); done
-  printf '03:%02d' $((10 + 30*i))
+  local i=0 n mins; for n in $(node_names); do [ "$n" = "$1" ] && break; i=$((i+1)); done
+  mins=$((10 + 30 * i))                      # урок: минуты переполнялись («03:70» = мёртвый cron)
+  printf '%02d:%02d' $((3 + mins / 60)) $((mins % 60))
 }
 
 # ---------- ssh к нодам ----------

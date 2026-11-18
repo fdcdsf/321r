@@ -92,6 +92,17 @@ if systemctl is-active ssh.socket >/dev/null 2>&1 || systemctl is-enabled ssh.so
   systemctl restart ssh        # при переходе с socket-активации — именно restart (урок)
 else
   systemctl reload sshd 2>/dev/null || systemctl reload ssh
+
+# --- 5б) порт 53/udp нужен Pangolin (DNS-сервер gerbil); на Ubuntu его держит
+#        systemd-resolved (урок теста: «53/udp: address already in use»).
+#        Гасим resolved и фиксируем DNS провайдера статикой. ---
+if systemctl is-active systemd-resolved >/dev/null 2>&1; then
+  if [ -s /run/systemd/resolve/resolv.conf ]; then
+    cp -f /run/systemd/resolve/resolv.conf /etc/resolv.conf
+  fi
+  systemctl disable --now systemd-resolved >/dev/null 2>&1 || true
+  echo "  systemd-resolved выключен, DNS закреплён статикой"
+fi
 fi
 # ГРОМКАЯ проверка: если 2222 не слушается — это ломает весь кластер, стоп!
 for i in $(seq 1 10); do
