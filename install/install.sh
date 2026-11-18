@@ -3,7 +3,7 @@
 #
 #   ./install.sh                  — мастер: спросит всё и установит
 #   ./install.sh my.conf          — установка по готовому инвентарю
-#   ./install.sh --from=db        — продолжить с шага (preflight|base|mesh|swarm|db|backup|tgbot|check|harden)
+#   ./install.sh --from=db        — продолжить с шага (preflight|base|mesh|swarm|db|backup|tgbot|dns|pangolin|komodo|remnawave|check|handover|harden)
 #   ./install.sh --check          — только автоприёмка
 #   ./install.sh --manifest       — только перегенерировать cluster.yml из инвентаря
 #
@@ -240,7 +240,10 @@ echo "=========================================="
 if [ -z "$CHECK_ONLY" ]; then
   echo "УСТАНОВКА ЗАВЕРШЕНА. Что дальше:"
   echo " 1. сверьте отчёт автоприёмки выше — все ✓?"
-  echo " 2. панели (Pangolin/Remnawave/Komodo) — по докам docs/, если они вам нужны;"
-  echo " 3. дриллы и эксплуатация — V1/17, V1/21; бот — @ваш_бот."
+  echo " 2. 🔐 ПАМЯТКА ВЛАДЕЛЬЦА уже в Telegram: все пароли, ключи, ссылки и секреты."
+  echo "    Сохраните её в надёжном месте (менеджер паролей / печать); копия на сервере:"
+  echo "    /root/321r-pamyatka-*.txt (права 600)."
+  echo " 3. панели (Pangolin/Remnawave/Komodo) — по докам docs/, если они вам нужны;"
+  echo " 4. дриллы и эксплуатация — V1/17, V1/21; бот — @ваш_бот."
 fi
 echo "Повторная проверка: ./install.sh --check"
