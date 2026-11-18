@@ -87,11 +87,11 @@ gen_init_app() { # роли/база + pg_hba для mesh; читает ЛОКА
 set -euo pipefail
 . /etc/db/secrets/@APP@.env
 q() { docker exec -u postgres pg-@APP@ psql -U postgres -tAc "$1"; }
-for _ in $(seq 1 60); do
+for _ in $(seq 1 180); do
   q "SELECT 1" >/dev/null 2>&1 && break
   sleep 1
 done
-q "SELECT 1" >/dev/null 2>&1 || { echo "PG не поднялся за 60 с" >&2; exit 1; }
+q "SELECT 1" >/dev/null 2>&1 || { echo "PG не поднялся за 180 с" >&2; exit 1; }
 q "SELECT 1 FROM pg_roles WHERE rolname='replicator'" | grep -q '^1$' || \
   q "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '${REPL_PASSWORD}'"
 q "SELECT 1 FROM pg_roles WHERE rolname='@APP@'" | grep -q '^1$' || \

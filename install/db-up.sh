@@ -57,14 +57,17 @@ arbiter: $arb"
   fi
 done
 
-# 4) db-add для каждого приложения (пропускаем уже развёрнутые)
+# 4) db-add для каждого приложения (пропускаем полностью развёрнутые)
 CTRL="$CONTROL"
 for row in "${APPS[@]}"; do
   app="$(app_name "$row")"; engine="$(app_engine "$row")"
+  primary="$(app_placement "$row" | awk '{print $1}')"
   dir="pg-$app"; [ "$engine" = "mongo" ] && dir="mongo-$app"
-  deployed=0
+  # «развёрнуто» = данные есть на ВСЕХ узлах placement (урок: доделывать частично
+  # развёрнутое — ровно так же через повторный db-add)
+  deployed=1
   for a in $(app_placement "$row"); do
-    if nssh "$a" "[ -d /var/lib/dbdata/$dir ]"; then deployed=1; break; fi
+    if ! nssh "$a" "[ -d /var/lib/dbdata/$dir ]"; then deployed=0; break; fi
   done
   if [ "$deployed" = 1 ]; then
     ok "$app: уже развёрнут — пропускаю"
