@@ -160,15 +160,22 @@ render_manifest() {
   ok "манифест cluster.yml разложен по нодам"
 }
 
+run_script() { # run_script <файл> <название шага>
+  if [ -f "$HERE/$1" ]; then
+    bash "$HERE/$1"
+  else
+    warn "шаг «$2» ещё не реализован ($1) — пропускаю (добавится позже, повторить: --from=…)"
+  fi
+}
 step_mesh()     { step "Меш AmneziaWG";        bash "$HERE/mesh-up.sh"; }
 step_swarm()    { step "Docker Swarm";         bash "$HERE/swarm-up.sh"; }
 step_db()       { step "Слой баз данных";      bash "$HERE/db-up.sh"; }
 step_backup()   { step "Бэкапы 3-2-1";         bash "$HERE/backup-up.sh"; }
 step_tgbot()    { step "Telegram-бот и дозор"; bash "$HERE/tgbot-up.sh"; }
-step_dns()      { step "DNS и сертификаты";    bash "$HERE/dns-up.sh"; }
-step_pangolin() { step "Pangolin (доступ к сервисам)"; bash "$HERE/pangolin-up.sh"; }
-step_komodo()   { step "Komodo (управление серверами)"; bash "$HERE/komodo-up.sh"; }
-step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; bash "$HERE/remnawave-up.sh"; }
+step_dns()      { step "DNS и сертификаты";    run_script dns-up.sh "DNS"; }
+step_pangolin() { step "Pangolin (доступ к сервисам)"; run_script pangolin-up.sh "Pangolin"; }
+step_komodo()   { step "Komodo (управление серверами)"; run_script komodo-up.sh "Komodo"; }
+step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; run_script remnawave-up.sh "Remnawave+маски"; }
 step_check()    { step "Автоприёмка";          bash "$HERE/install-check.sh"; }
 step_harden()   { step "Финальная защита ssh"
   local a
