@@ -198,9 +198,11 @@ step_harden()   { step "Финальная защита ssh"
   local a
   if [ -n "${USER_SSH_KEY:-}" ]; then
     for a in $(node_names); do
-      nssh "$a" "grep -qF '$USER_SSH_KEY' /root/.ssh/authorized_keys 2>/dev/null || echo '$USER_SSH_KEY' >> /root/.ssh/authorized_keys"
+      nssh "$a" "grep -qF '$USER_SSH_KEY' /root/.ssh/authorized_keys 2>/dev/null || echo '$USER_SSH_KEY' >> /root/.ssh/authorized_keys
+        grep -qF '$USER_SSH_KEY' /root/.ssh/authorized_keys || { echo 'ключ не попал в authorized_keys' >&2; exit 1; }"
     done
-    ok "ваш публичный ключ заложен на все ноды"
+    ok "ваш публичный ключ заложен на все ноды (и проверен!) ⚠ ПАРНЫЙ К НЕМУ приватный ключ должен быть у вас:"
+    warn "перед выходом УБЕДИТЕСЬ, что вход вашим ключом работает: ssh -p 2222 root@<IP> (с вашего компьютера)!"
     for a in $(node_names); do
       nssh "$a" "sed -i 's/^#\\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
         sed -i 's/^#\\?KbdInteractiveAuthentication .*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config
