@@ -14,18 +14,13 @@ else
   nssh "$CTRL" 'set -e
     mkdir -p /etc/db/secrets/komodo-keys
     umask 077
-    openssl rand -base64 32 > /etc/db/secrets/komodo-keys/core.key
+    # Урок: Core принимает ключ ТОЛЬКО pkcs8 (PEM) или строкой ≤32 символов;
+    # base64 от 32 байт (44 символа) = паника «Private key must be 32 characters...».
+    openssl genpkey -algorithm X25519 -out /etc/db/secrets/komodo-keys/core.key
+    openssl pkey -in /etc/db/secrets/komodo-keys/core.key -pubout -outform DER | base64 -w0 > /etc/db/secrets/komodo-keys/core.pub
     openssl rand -base64 24 | tr -d "/+=" | head -c 28 > /etc/db/secrets/komodo.env.adminpass
     openssl rand -base64 32 > /etc/db/secrets/komodo.env.jwt
     openssl rand -base64 32 > /etc/db/secrets/komodo.env.webhook
-    # core.pub (SPKI base64) из приватного — для пининга periphery
-    python3 - <<PY
-import base64, subprocess
-raw = base64.b64decode(open("/etc/db/secrets/komodo-keys/core.key").read().strip())
-der = bytes.fromhex("302e020100300506032b656e04220420") + raw
-p = subprocess.run(["openssl", "pkey", "-inform", "DER", "-pubout", "-outform", "DER"], input=der, capture_output=True)
-open("/etc/db/secrets/komodo-keys/core.pub", "w").write(base64.b64encode(p.stdout).decode())
-PY
     docker secret create komodo-core-key /etc/db/secrets/komodo-keys/core.key >/dev/null
     docker secret create komodo-jwt-secret /etc/db/secrets/komodo.env.jwt >/dev/null
     docker secret create komodo-webhook-secret /etc/db/secrets/komodo.env.webhook >/dev/null
