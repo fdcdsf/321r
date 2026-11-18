@@ -25,4 +25,10 @@ curl -fsSL "$REPO_TARBALL" | tar xz -C /tmp
 mv /tmp/321r-master "$TARGET"
 cd "$TARGET"
 
-exec bash install/install.sh
+# ВАЖНО: при «curl | bash» stdin — это пайп, а не терминал (урок: мастер-вопросы
+# читать не откуда). Переключаем ввод мастера на настоящий терминал пользователя.
+if [ -e /dev/tty ]; then
+  exec bash install/install.sh < /dev/tty
+else
+  exec bash install/install.sh
+fi
