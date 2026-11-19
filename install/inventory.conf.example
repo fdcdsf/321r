@@ -39,6 +39,22 @@ DOMAIN=""
 # Cloudflare API-токен (Edit zone DNS) — для ddns и сертификатов DNS-01. Опционально.
 CF_API_TOKEN=""
 
+# Pangolin: auto создаёт админа, сайты Newt и ресурсы. Лицензия EE (если есть) —
+# файл install/secrets/pangolin-license.key (600), мастер создаёт его сам.
+PANGOLIN_SETUP_MODE="auto"        # auto | manual
+
+# Remnawave: панель на control VPS или существующая домашняя через Pangolin/Newt.
+# В connect удалите строку remnawave pg из APPS (мастер делает это автоматически).
+REMNAWAVE_MODE="install"          # install | connect
+REMNAWAVE_PANEL_URL=""             # пусто = https://rem.$DOMAIN
+# При connect: install/secrets/remnawave-api.token (600) — API-токен домашней панели.
+
+# WARP-конфиг ИНДИВИДУАЛЬНЫЙ на каждую ноду. Пути — на первом сервере; пусто =
+# позже загрузить .conf через Telegram-бота. Никогда не копируйте один ключ на все VPS.
+WARP_CONF_a=""
+WARP_CONF_b=""
+WARP_CONF_c=""
+
 # Ваш публичный ssh-ключ (ssh-ed25519 AAAA...). Если задан — попадёт на все сервера,
 # и финальный шаг отключит парольный вход. Пусто — парольный вход останется.
 USER_SSH_KEY=""

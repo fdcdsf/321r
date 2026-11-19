@@ -154,7 +154,7 @@ if [ -f "$ROOT/deploy/harvest/mask_config.yml" ]; then
     if nssh "$a" 'systemctl is-active --quiet mtproto-proxy.service'; then
       gw="$(nssh "$a" "docker network inspect pangolin --format '{{(index .IPAM.Config 0).Gateway}}'")"
       [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$a: не найден gateway Docker-сети pangolin"
-      sed -e "s/321r\.ru/$DOMAIN/g" -e "s/172\.22\.0\.1/$gw/g" "$ROOT/deploy/harvest/mask_config.yml" \
+      sed -e "s/321r\.ru/$DOMAIN/g" -e "s/__NODE__/$a/g" -e "s/172\.22\.0\.1/$gw/g" "$ROOT/deploy/harvest/mask_config.yml" \
         | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
       ok "$a: маски восстановлены (Docker gateway $gw)"
     fi

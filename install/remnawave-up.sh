@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 321r · шаг: Remnawave (панель VPN) + 3 ноды Xray + маскировка (mtproto.zig) + egress.
+# 321r · шаг: Remnawave (панель на кластере ИЛИ дома) + ноды Xray + маскировка.
 # Идемпотентен. Запускается: bash install/remnawave-up.sh
 # Требует: шаги db (pg remnawave) и dns (сертификаты DNS-01) уже пройдены.
 set -euo pipefail
@@ -7,11 +7,18 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 
 [ -n "${DOMAIN:-}" ] || { warn "нет DOMAIN — Remnawave/маски без домена невозможны, шаг пропущен"; exit 0; }
 CTRL="$CONTROL"
-RU_NODE="${RU_NODE:-$(node_names | head -1)}"   # нода в РФ: её Telegram-трафик уходит через зарубежную
-GW_MESH="$(node_mesh "$CTRL")"
+MODE="${REMNAWAVE_MODE:-install}"
+case "$MODE" in install|connect) ;; *) fail "REMNAWAVE_MODE должен быть install или connect" ;; esac
+PANEL_URL="${REMNAWAVE_PANEL_URL:-https://rem.$DOMAIN}"
+[[ "$PANEL_URL" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?$ ]] || fail "REMNAWAVE_PANEL_URL должен быть HTTPS-адресом без пути"
 H="$ROOT/deploy/harvest"
+if [ "$MODE" = connect ]; then
+  [ -s "$SECRETS/remnawave-api.token" ] || fail "connect требует $SECRETS/remnawave-api.token"
+  curl -fsS -o /dev/null --max-time 15 "$PANEL_URL/api/auth/status" \
+    || fail "домашняя панель недоступна по $PANEL_URL — сначала подключите Newt и ресурс rem.$DOMAIN"
+fi
 
-step "Сертификаты маскировки (DNS-01, per node: vpn-<имя> + tg)"
+step "Сертификаты маскировки (DNS-01, свой vpn-<имя> + tg на каждой ноде)"
 # Урок: certbot в базовый набор не входит; без сертификатов nginx маски не стартует.
 for a in $(node_names); do
   nssh "$a" 'command -v certbot >/dev/null 2>&1 || {
@@ -23,12 +30,19 @@ done
 pids=(); bad=0
 for a in $(node_names); do
   (
-    nssh "$a" "certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
-        -d vpn-$a.$DOMAIN -d tg.$DOMAIN --non-interactive --agree-tos -m admin@$DOMAIN 2>&1 | tail -4
-      d=\$(ls -d /etc/letsencrypt/live/vpn-$a.* 2>/dev/null | head -1)
+    nssh "$a" "set -e
+      d='/etc/letsencrypt/live/vpn-$a.$DOMAIN'
+      if [ -s \"\$d/fullchain.pem\" ]; then
+        certbot renew --cert-name 'vpn-$a.$DOMAIN' --non-interactive >/dev/null
+      else
+        certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+          --cert-name vpn-$a.$DOMAIN -d vpn-$a.$DOMAIN -d tg.$DOMAIN \
+          --non-interactive --agree-tos -m admin@$DOMAIN >/dev/null
+      fi
       if [ -n \"\$d\" ]; then
+        test -s \"\$d/fullchain.pem\"
         ln -sfn \"\$d\" /etc/letsencrypt/live/mask
-        echo \"сертификат: \$d\"
+        echo 'маска: сертификат vpn-$a.$DOMAIN готов'
       else
         echo \"СЕРТИФИКАТ НЕ ВЫДАН — nginx маски не будет запущен\" >&2
         exit 1
@@ -55,10 +69,11 @@ for a in $(node_names); do
   ok "$a: nginx-заглушки на месте"
 done
 
-step "Панель Remnawave на $CTRL (БД — наш VIP:5433)"
-if nssh "$CTRL" 'docker ps --format "{{.Names}}" | grep -qx remnawave'; then
-  ok "панель уже работает"
-else
+if [ "$MODE" = install ]; then
+ step "Панель Remnawave на $CTRL (БД — наш VIP:5433)"
+ if nssh "$CTRL" 'docker ps --format "{{.Names}}" | grep -qx remnawave'; then
+   ok "панель уже работает"
+ else
   nssh "$CTRL" 'mkdir -p /opt/remnawave/subscription /var/lib/dbdata'
   ncp "$CTRL" "$H/remnawave-compose.yml" /opt/remnawave/docker-compose.yml
   ncp "$CTRL" "$H/subpage-compose.yml" /opt/remnawave/subscription/docker-compose.yml
@@ -89,12 +104,29 @@ POSTGRES_DB=remnawave
 EOF
     chmod 600 .env
     docker compose up -d'
-  ok "панель поднята (первый старт — миграции, ~1-2 мин)"
+   ok "панель поднята (первый старт — миграции, ~1-2 мин)"
+ fi
+else
+  step "Подключение к домашней Remnawave ($PANEL_URL)"
+  [ -s "$SECRETS/remnawave-api.token" ] || fail "connect требует $SECRETS/remnawave-api.token"
+  ok "панель на VPS не устанавливаю"
 fi
 
-step "Заглушка HC для подписки (nginx 127.0.0.1:3011 на $CTRL)"
-sed "s/sub\.321r\.ru/sub.$DOMAIN/g" "$H/nginx-subpage-hc.conf" | nssh "$CTRL" 'cat > /etc/nginx/sites-enabled/subpage-hc'
-nssh "$CTRL" 'systemctl restart nginx'
+if [ "$MODE" = install ]; then
+  step "Локальные HC-адаптеры Remnawave"
+  sed "s/sub\.321r\.ru/sub.$DOMAIN/g" "$H/nginx-subpage-hc.conf" | nssh "$CTRL" 'cat > /etc/nginx/sites-enabled/subpage-hc'
+  sed "s/__DOMAIN__/$DOMAIN/g" "$H/nginx-rem-hc.conf" | nssh "$CTRL" 'cat > /etc/nginx/sites-enabled/rem-hc'
+  nssh "$CTRL" 'nginx -t >/dev/null 2>&1 && systemctl reload nginx' || fail "nginx HC-конфиг не применился"
+  # На чистой БД Remnawave мигрирует ~1–2 мин: до healthy nginx отдаёт 502.
+  hc_ok=""
+  for i in $(seq 1 60); do
+    if nssh "$CTRL" 'curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:3012/ 2>/dev/null'; then
+      hc_ok=1; break
+    fi
+    sleep 5
+  done
+  [ -n "$hc_ok" ] || fail "Remnawave HC :3012 не отвечает за 5 минут"
+fi
 
 step "VPN-ноды Xray (remnanode) ×3"
 for a in $(node_names); do
@@ -145,7 +177,7 @@ step "WARP-туннель для mtproto (обход РКН; только mtprot
 # Урок 2026-11-18: старая схема «tg-egress/mesh-egress через ноду-шлюз» не работает —
 # все ноды кластера в РФ (проверено: geo RU у всех), чужой egress не спасает. WARP
 # (обфусцированный WireGuard до Cloudflare) выводит трафик mtproto наружу с IP Cloudflare.
-# Через WARP идёт ТОЛЬКО mtproto.zig (fwmark по uid пользователя mtproto), нода не страдает.
+# Через WARP идут только помеченные mtproto.zig сокеты (SO_MARK=200 от mtbuddy).
 for a in $(node_names); do
   ncp "$a" "$ROOT/scripts/warp-321r.sh" /usr/local/bin/warp-321r.sh
   ncp "$a" "$H/warp.service" /etc/systemd/system/warp.service
@@ -153,16 +185,23 @@ for a in $(node_names); do
     systemctl daemon-reload
     systemctl enable warp.service >/dev/null 2>&1 || true'
 done
-# WARP-конфиг: из инвентаря (WARP_CONF — путь к файлу на мастере) или уже лежит на ноде
-if [ -n "${WARP_CONF:-}" ] && [ -f "$WARP_CONF" ]; then
-  for a in $(node_names); do
-    ncp "$a" "$WARP_CONF" /etc/amnezia/amneziawg/warp.conf
+# Один файл на весь кластер запрещён: для каждой ноды свой приватный ключ WARP.
+# Инвентарь: WARP_CONF_a=/path/a.conf (или отдельная загрузка через бот).
+declare -A WARP_HASHES=()
+for a in $(node_names); do
+  var="WARP_CONF_$a"; src="${!var:-}"
+  if nssh "$a" '[ -s /etc/amnezia/amneziawg/warp.conf ]'; then
+    ok "$a: WARP-конфиг уже есть, не перезаписываю (могли заменить через бота)"
+  elif [ -n "$src" ]; then
+    [ -f "$src" ] || fail "$a: WARP-конфиг не найден ($src)"
+    hash="$(sha256sum "$src" | cut -d' ' -f1)"
+    [ -z "${WARP_HASHES[$hash]:-}" ] || fail "$a: WARP-конфиг совпадает с ${WARP_HASHES[$hash]} — каждой ноде нужен свой ключ"
+    WARP_HASHES[$hash]="$a"
+    ncp "$a" "$src" /etc/amnezia/amneziawg/warp.conf
     nssh "$a" 'chmod 600 /etc/amnezia/amneziawg/warp.conf'
-  done
-  ok "WARP-конфиг разложен по нодам (из $WARP_CONF)"
-else
-  warn "WARP_CONF не задан и конфига нет — mtproto без обхода (включите позже через бота)"
-fi
+    ok "$a: индивидуальный WARP-конфиг разложен"
+  fi
+done
 pids=()
 for a in $(node_names); do
   (
@@ -187,9 +226,7 @@ for a in $(node_names); do
     ip route del 91.108.56.0/22 2>/dev/null || true
     ip route del 149.154.160.0/20 2>/dev/null || true'
 done
-nssh "$RU_NODE" "sed -i 's|, 91.108.4.0/22, 91.108.8.0/22, 91.108.56.0/22, 149.154.160.0/20||' /etc/amnezia/amneziawg/wg0.conf
-  systemctl restart awg0.service" >/dev/null 2>&1 || warn "$RU_NODE: не удалось откатить AllowedIPs в wg0.conf"
-ok "старая схема egress через $CTRL удалена; mtproto теперь через WARP"
+ok "старая схема egress через шлюз удалена; mtproto использует WARP при наличии индивидуального конфига"
 
 step "Traefik-маска (passthrough vpn-* и tg)"
 # Урок: force-recreate gerbil/traefik через compose НАДЕЖНО зависает (traefik живёт в
@@ -198,26 +235,48 @@ step "Traefik-маска (passthrough vpn-* и tg)"
 for a in $(node_names); do
   gw="$(nssh "$a" "docker network inspect pangolin --format '{{(index .IPAM.Config 0).Gateway}}'")"
   [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$a: не найден gateway Docker-сети pangolin"
-  sed -e "s/321r\.ru/$DOMAIN/g" -e "s/172\.22\.0\.1/$gw/g" "$H/mask_config.yml" \
+  sed -e "s/321r\.ru/$DOMAIN/g" -e "s/__NODE__/$a/g" -e "s/172\.22\.0\.1/$gw/g" "$H/mask_config.yml" \
     | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
   nssh "$a" 'docker restart traefik >/dev/null 2>&1 || true' &
 done
 wait
-ok "маска подключена к traefik (матрица 3×3 на каждой ноде)"
+ok "маска подключена к traefik (каждая VPN-нода — только свой SNI и IP)"
 
-cat <<EOF
+step "Доступ к панели и автонастройка минимального VPN (режим $MODE)"
+if [ "$MODE" = install ]; then
+  # Панель слушает localhost control-ноды, Newt cluster-<control> ведёт к ней.
+  panel_health=""
+  for i in $(seq 1 60); do
+    panel_health="$(nssh "$CTRL" 'docker inspect -f "{{.State.Health.Status}}" remnawave 2>/dev/null' || true)"
+    [ "$panel_health" = healthy ] && break
+    sleep 5
+  done
+  [ "$panel_health" = healthy ] || fail "панель Remnawave не healthy за 5 минут"
+  [ -s /etc/db/secrets/pangolin-admin.json ] \
+    || fail "для автоматического ресурса rem.$DOMAIN нужна автонастройка Pangolin"
+  python3 "$ROOT/scripts/pangolin-resources.py" --url "https://pangolin.$DOMAIN" \
+    --org-id cluster --domain "$DOMAIN" \
+    --spec "rem:$CTRL:127.0.0.1:3000:http:3012:/" \
+    --repair-ip "$(node_ip "$(node_names | head -1)")"
+  bash "$HERE/pangolin-resource-certs.sh" rem
+else
+  # Домашний Proxmox за серым IP: сначала создать site cluster-home и запустить
+  # install/home-newt.sh внутри LXC, затем направить rem.<домен> к домашней панели.
+  curl -fsS -o /dev/null --max-time 15 "$PANEL_URL/api/auth/status" \
+    || fail "домашняя панель недоступна по $PANEL_URL — подключите Newt и ресурс rem.$DOMAIN"
+fi
 
-  Remnawave + маскировка: инфраструктура готова. Осталось через панель/API
-  (docs/remnawave.md, шаги идемпотентны):
-   1. открыть https://rem.$DOMAIN (первый вход: admin/admin → сменить пароль, 2FA);
-   2. Config Profile «321r-mask»: инбаунды masked-vless (:9446, fallback 9447,
-      tls alpn http/1.1, decryption none) и reality-backup (:2087);
-   3. зарегистрировать ноды: SECRET_KEY из GET /api/keygen → /opt/remnanode/.env →
-      docker compose up -d; POST /api/nodes с configProfile;
-   4. хосты (vpn-<имя>:443 и :2087 на каждый инбаунд), Internal Squad, пользователь
-      (expireAt обязателен!) → подписка https://sub.$DOMAIN/api/sub/<shortUuid>;
-   5. subpage: токен (POST /api/tokens, scopes ['*']) → /opt/remnawave/subscription/.env
-      REMNAWAVE_API_TOKEN → docker compose up -d;
-   6. ресурсы Pangolin rem.$DOMAIN → 127.0.0.1:3000, sub.$DOMAIN → 127.0.0.1:3010 (HC 3011).
-  Ссылка маски Telegram: $(mtproto_link "tg.$DOMAIN" "$MSEC")
-EOF
+args=(--mode "$MODE" --panel-url "$PANEL_URL"
+      --admin-file /etc/db/secrets/remnawave-admin.json
+      --token-file "$SECRETS/remnawave-api.token")
+python3 "$ROOT/scripts/remnawave-bootstrap.py" "${args[@]}"
+node_args=()
+for a in $(node_names); do node_args+=(--node "$a:$(node_mesh "$a")"); done
+python3 "$ROOT/scripts/remnawave-nodes.py" "${args[@]}" \
+  --ssh-key "$SSH_KEY" --compose "$H/remnanode-compose.yml" "${node_args[@]}"
+mask_args=()
+for a in $(node_names); do mask_args+=(--node "$a"); done
+python3 "$ROOT/scripts/remnawave-mask.py" "${args[@]}" --domain "$DOMAIN" "${mask_args[@]}"
+ok "профиль, ноды и минимальная подписка настроены в режиме $MODE"
+echo "Пробная подписка — /etc/db/secrets/remnawave-probe-url на первом сервере."
+echo "Ссылка маски Telegram — в памятке владельца (FakeTLS)."

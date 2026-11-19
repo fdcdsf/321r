@@ -137,6 +137,24 @@ if [ "${PANGOLIN_SETUP_MODE:-manual}" = auto ] && [ -n "${DOMAIN:-}" ]; then
   done
 fi
 
+if [ -n "${DOMAIN:-}" ]; then
+  echo "== 15. Remnawave: собственная нода/IP, подключение и подписка =="
+  rw_args=(--mode "${REMNAWAVE_MODE:-install}" --panel-url "${REMNAWAVE_PANEL_URL:-https://rem.$DOMAIN}"
+           --domain "$DOMAIN" --token-file "$SECRETS/remnawave-api.token" --check-only)
+  for a in $(node_names); do rw_args+=(--node "$a"); done
+  if python3 "$ROOT/scripts/remnawave-mask.py" "${rw_args[@]}"; then
+    ok_c "Remnawave: все ноды подключены, подписка содержит только свои VPN-имена"
+  else
+    fail_c "Remnawave: ноды или подписка не прошли проверку"
+  fi
+  for a in $(node_names); do
+    code="$(nssh "$a" "curl -sS -o /dev/null -w '%{http_code}' --max-time 12 \
+      --resolve vpn-$a.$DOMAIN:443:127.0.0.1 https://vpn-$a.$DOMAIN/ 2>/dev/null" || true)"
+    [ "$code" = 200 ] && ok_c "$a: vpn-$a.$DOMAIN — собственная TLS-маска 200" \
+      || fail_c "$a: собственная TLS-маска не работает (HTTP ${code:-нет})"
+  done
+fi
+
 echo
 echo "=========================================="
 echo "ИТОГ: ✓ $PASS  ! $WARN  ✗ $FAILN"

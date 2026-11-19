@@ -26,10 +26,10 @@ for name in "$@"; do
           '    - certFile: /etc/letsencrypt/live/$host/fullchain.pem' \
           '      keyFile: /etc/letsencrypt/live/$host/privkey.pem' > \"\$f.tmp\"
         mv -f \"\$f.tmp\" \"\$f\"
-        for i in 1 2 3 4 5; do
+        for i in \$(seq 1 36); do
           curl -fsS -o /dev/null --max-time 12 \
             --resolve '$host:443:127.0.0.1' 'https://$host/' 2>/dev/null && break
-          sleep 2
+          sleep 5
         done
         curl -fsS -o /dev/null --max-time 12 \
           --resolve '$host:443:127.0.0.1' 'https://$host/' 2>/dev/null

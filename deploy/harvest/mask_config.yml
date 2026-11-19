@@ -1,5 +1,5 @@
 # Маскировка VPN/mtproto (docs/remnawave.md): SNI -> TCP passthrough -> host-сервисы.
-# Живучесть: ЛЮБАЯ нода обслуживает любое имя vpn-* (сертификат с 4 SAN).
+# VPN-нода НЕ переносится: каждая нода обслуживает только vpn-<своё имя>.
 # http(:80) -> https: браузер без схемы обязан уходить на 443 (иначе 404 без сертификата).
 http:
   middlewares:
@@ -8,18 +8,8 @@ http:
         scheme: https
         permanent: true
   routers:
-    mask-redir-a:
-      rule: "Host(`vpn-a.321r.ru`)"
-      entryPoints: [web]
-      service: noop@internal
-      middlewares: [mask-https-redirect]
-    mask-redir-b:
-      rule: "Host(`vpn-b.321r.ru`)"
-      entryPoints: [web]
-      service: noop@internal
-      middlewares: [mask-https-redirect]
-    mask-redir-c:
-      rule: "Host(`vpn-c.321r.ru`)"
+    mask-redir-vpn:
+      rule: "Host(`vpn-__NODE__.321r.ru`)"
       entryPoints: [web]
       service: noop@internal
       middlewares: [mask-https-redirect]
@@ -30,18 +20,8 @@ http:
       middlewares: [mask-https-redirect]
 tcp:
   routers:
-    mask-vpn-a:
-      rule: "HostSNI(`vpn-a.321r.ru`)"
-      entryPoints: [websecure]
-      service: mask-vpn
-      tls: { passthrough: true }
-    mask-vpn-b:
-      rule: "HostSNI(`vpn-b.321r.ru`)"
-      entryPoints: [websecure]
-      service: mask-vpn
-      tls: { passthrough: true }
-    mask-vpn-c:
-      rule: "HostSNI(`vpn-c.321r.ru`)"
+    mask-vpn:
+      rule: "HostSNI(`vpn-__NODE__.321r.ru`)"
       entryPoints: [websecure]
       service: mask-vpn
       tls: { passthrough: true }

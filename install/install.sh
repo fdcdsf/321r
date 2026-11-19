@@ -66,6 +66,34 @@ wizard() {
       (umask 077; printf '%s' "$pangolin_license" > "$HERE/secrets/pangolin-license.key")
       unset pangolin_license
     fi
+    read -rp "Remnawave: панель на кластере или существующая дома? [install/connect]: " x
+    REMNAWAVE_MODE="${x:-install}"
+    case "$REMNAWAVE_MODE" in
+      install) REMNAWAVE_PANEL_URL="https://rem.$DOMAIN" ;;
+      connect)
+        read -rp "HTTPS-адрес домашней панели через Pangolin [https://rem.$DOMAIN]: " x
+        REMNAWAVE_PANEL_URL="${x:-https://rem.$DOMAIN}"
+        read -rsp "API-токен существующей Remnawave: " rem_token </dev/tty; echo
+        [ -n "$rem_token" ] || { echo 'для connect нужен API-токен'; exit 1; }
+        install -d -m 700 "$HERE/secrets"
+        (umask 077; printf '%s' "$rem_token" > "$HERE/secrets/remnawave-api.token")
+        unset rem_token ;;
+      *) echo 'Выберите install или connect'; exit 1 ;;
+    esac
+    if [ "$REMNAWAVE_MODE" = connect ]; then
+      # Домашняя панель хранит свою БД дома; на VPS отдельный PG remnawave не нужен.
+      remaining=()
+      for row in "${apps[@]}"; do
+        [ "${row%% *}" = remnawave ] || remaining+=("$row")
+      done
+      apps=("${remaining[@]}")
+    fi
+    warp_files=()
+    for row in "${nodes[@]}"; do
+      a="${row%% *}"
+      read -rp "Путь к индивидуальному WARP .conf для $a на этом сервере (пусто = загрузить через бота позже): " x
+      warp_files+=("$a $x")
+    done
   fi
   read -rp "Ваш публичный ssh-ключ (пусто = оставить парольный вход): " USER_SSH_KEY
   read -rp "Профиль ресурсов S/M/L [L]: " x; PROFILE="${x:-L}"
@@ -84,6 +112,13 @@ wizard() {
     echo "DOMAIN=\"$DOMAIN\""
     echo "CF_API_TOKEN=\"$CF_API_TOKEN\""
     echo "PANGOLIN_SETUP_MODE=\"$PANGOLIN_SETUP_MODE\""
+    echo "REMNAWAVE_MODE=\"${REMNAWAVE_MODE:-install}\""
+    echo "REMNAWAVE_PANEL_URL=\"${REMNAWAVE_PANEL_URL:-}\""
+    for item in "${warp_files[@]:-}"; do
+      [ -n "$item" ] || continue
+      a="${item%% *}"; conf="${item#* }"
+      if [ -n "$conf" ]; then printf 'WARP_CONF_%s=%q\n' "$a" "$conf"; fi
+    done
     echo "USER_SSH_KEY=\"$USER_SSH_KEY\""
     echo "PROFILE=\"$PROFILE\""
     echo "BACKUP_WINDOWS=\"\""
@@ -218,6 +253,11 @@ step_pangolin() {
     python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}"
     bash "$HERE/pangolin-agents.sh"
     python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}" --status
+    if [ "${REMNAWAVE_MODE:-install}" = connect ]; then
+      python3 "$ROOT/scripts/pangolin-sites.py" --url "https://pangolin.$DOMAIN" \
+        --org-id cluster --node home
+      ok "сайт cluster-home для будущего домашнего LXC готов; его ключи — в памятке"
+    fi
   fi
 }
 step_komodo() {

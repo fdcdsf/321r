@@ -23,6 +23,11 @@ fi
 [ -n "$SETUP_TOK" ] && ok "статус setup token Pangolin получен (значение — только в файл)" || warn "setup token в логах не найден"
 RW_PASS="$(nssh "$CTRL" "grep '^APP_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
 RW_PG="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
+RW_ADMIN="(внешняя панель: доступы у владельца)"
+if [ -s /etc/db/secrets/remnawave-admin.json ]; then
+  RW_ADMIN="$(python3 -c 'import json; d=json.load(open("/etc/db/secrets/remnawave-admin.json")); print(d["username"] + " / " + d["password"])')"
+fi
+RW_PROBE="$(cat /etc/db/secrets/remnawave-probe-url 2>/dev/null || echo '(пока не настроена)')"
 K_ADMIN="$(nssh "$CTRL" "grep '^KOMODO_INIT_ADMIN_PASSWORD=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_JWT="$(nssh "$CTRL" "grep '^KOMODO_JWT_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_WEBHOOK="$(nssh "$CTRL" "grep '^KOMODO_WEBHOOK_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
@@ -46,6 +51,10 @@ NEWT_CREDS="$(for a in $(node_names); do
     tr '\n' ' ' < "/etc/db/secrets/newt-$a.env"
   fi
 done)"
+if [ -f /etc/db/secrets/newt-home.env ]; then
+  NEWT_CREDS="$NEWT_CREDS
+  cluster-home: $(tr '\n' ' ' < /etc/db/secrets/newt-home.env)"
+fi
 if [ -n "${DOMAIN:-}" ] && [[ "$MSEC" =~ ^[a-fA-F0-9]{32}$ ]]; then
   MT_LINK="$(mtproto_link "tg.$DOMAIN" "$MSEC")"
 else
@@ -103,10 +112,12 @@ $K_CORE_KEY
   Onboarding-key периферии: $K_ONBOARD
 
 --- 6. REMNAWAVE -------------------------------------------------------------
-  Панель:      https://rem.${DOMAIN:-<ваш-домен>} (первый вход admin/admin → СМЕНИТЕ!)
-  Подписка:    https://sub.${DOMAIN:-<ваш-домен>}/api/sub/<shortUuid>
-  APP_SECRET (из .env на control): см. /opt/remnawave/.env
-  Пароль БД:   $RW_PASS
+  Режим:       ${REMNAWAVE_MODE:-install}
+  Панель:      ${REMNAWAVE_PANEL_URL:-https://rem.${DOMAIN:-<ваш-домен>}}
+  Вход:        $RW_ADMIN
+  Пробная подписка: $RW_PROBE
+  БД панели (только install): $RW_PASS
+  APP_SECRET (только install): /opt/remnawave/.env на control
 
 --- 7. МАСКА TELEGRAM (mtproto.zig) ------------------------------------------
   Ссылка FakeTLS: $MT_LINK
