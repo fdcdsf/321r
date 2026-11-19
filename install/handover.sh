@@ -13,9 +13,14 @@ step "Сбор секретов с нод"
 R_PGPASS="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
 R_APPPASS="$(nssh "$CTRL" "grep '^APP_PASSWORD=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
 R_PGSERV="$(nssh "$CTRL" "grep '^PANGOLIN_SERVER_SECRET=' /etc/db/secrets/pangolin.env | cut -d= -f2- | tr -d '\"'")"
-# код первичной настройки Pangolin — одноразовый; печатается в логах контейнера.
-SETUP_TOK="$(nssh "$CTRL" 'docker logs --tail 4000 pangolin 2>&1 | grep -A1 "SETUP TOKEN" | grep "Token:" | awk "{print \$2}" | tail -1' 2>/dev/null || true)"
-[ -n "$SETUP_TOK" ] && ok "setup token Pangolin получен (значение — только в файл)" || warn "setup token в логах не найден — похоже, первичная настройка уже пройдена"
+# Логи сохраняют старый token и ПОСЛЕ онбординга; не выдаём недействительный код.
+if [ -n "${DOMAIN:-}" ] && curl -fsS --max-time 8 "https://pangolin.$DOMAIN/api/v1/auth/initial-setup-complete" \
+     | jq -e '.data.complete == true' >/dev/null 2>&1; then
+  SETUP_TOK="(первичная настройка пройдена; код уже не действует)"
+else
+  SETUP_TOK="$(nssh "$CTRL" 'docker logs --tail 4000 pangolin 2>&1 | grep -A1 "SETUP TOKEN" | grep "Token:" | awk "{print \$2}" | tail -1' 2>/dev/null || true)"
+fi
+[ -n "$SETUP_TOK" ] && ok "статус setup token Pangolin получен (значение — только в файл)" || warn "setup token в логах не найден"
 RW_PASS="$(nssh "$CTRL" "grep '^APP_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
 RW_PG="$(nssh "$CTRL" "grep '^POSTGRES_PASSWORD=' /etc/db/secrets/remnawave.env | cut -d= -f2- | tr -d '\"'")"
 K_ADMIN="$(nssh "$CTRL" "grep '^KOMODO_INIT_ADMIN_PASSWORD=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
@@ -27,6 +32,20 @@ K_ONBOARD="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-onboarding.key')"
 RESTIC="$(nssh "$CTRL" "grep '^RESTIC_PASSWORD=' /etc/db/secrets/restic.env | cut -d= -f2- | tr -d '\"'")"
 CLUSTER_KEY="$(cat "$SECRETS/id_cluster" 2>/dev/null || echo '(нет)')"
 MSEC="$(cat "$SECRETS/mtproto-secret" 2>/dev/null || echo '(нет)')"
+PANGOLIN_ADMIN="(настроен вручную — учётные данные у владельца)"
+if [ -f /etc/db/secrets/pangolin-admin.json ]; then
+  PANGOLIN_ADMIN="$(python3 -c 'import json; d=json.load(open("/etc/db/secrets/pangolin-admin.json")); print(d["email"] + " / " + d["password"])')"
+fi
+PANGOLIN_LICENSE="(не задана при установке)"
+if [ -s "$SECRETS/pangolin-license.key" ]; then
+  PANGOLIN_LICENSE="$(cat "$SECRETS/pangolin-license.key")"
+fi
+NEWT_CREDS="$(for a in $(node_names); do
+  if [ -f "/etc/db/secrets/newt-$a.env" ]; then
+    printf '\n  cluster-%s: ' "$a"
+    tr '\n' ' ' < "/etc/db/secrets/newt-$a.env"
+  fi
+done)"
 if [ -n "${DOMAIN:-}" ] && [[ "$MSEC" =~ ^[a-fA-F0-9]{32}$ ]]; then
   MT_LINK="$(mtproto_link "tg.$DOMAIN" "$MSEC")"
 else
@@ -63,12 +82,15 @@ $CLUSTER_KEY
 
 --- 4. PANGOLIN --------------------------------------------------------------
   Панель:      https://pangolin.${DOMAIN:-<ваш-домен>} (первичный онбординг — вы задаёте админа)
+  Администратор (автоматический режим): $PANGOLIN_ADMIN
+  Newt-сайты (секреты хранятся на первом сервере):$NEWT_CREDS
   Код первичной настройки (setup token):
     ${SETUP_TOK:-(не найден в логах — настройка, похоже, уже пройдена)}
     взять самому: docker logs pangolin | grep -A1 "SETUP TOKEN"
     (актуален, пока не пройден первичный онбординг; если уже прошли — не требуется)
   server.secret: $R_PGSERV
-  EE-лицензия: вводится в панели (Settings).
+  EE-лицензия: $PANGOLIN_LICENSE
+  (в автоматическом режиме установщик активирует её через API Pangolin)
 
 --- 5. KOMODO ---------------------------------------------------------------
   Панель:      https://komodo.${DOMAIN:-<ваш-домен>} (ресурс Pangolin → 127.0.0.1:9120)

@@ -4,6 +4,7 @@
 #   ./install.sh                  — мастер: спросит всё и установит
 #   ./install.sh my.conf          — установка по готовому инвентарю
 #   ./install.sh --from=db        — продолжить с шага (preflight|base|mesh|swarm|db|backup|tgbot|dns|pangolin|komodo|remnawave|check|handover|harden)
+#   ./install.sh --from=pangolin --to=pangolin — повторить только один шаг
 #   ./install.sh --check          — только автоприёмка
 #   ./install.sh --manifest       — только перегенерировать cluster.yml из инвентаря
 #
@@ -11,10 +12,11 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
-FROM=""; CHECK_ONLY=""; MANIFEST_ONLY=""
+FROM=""; TO=""; CHECK_ONLY=""; MANIFEST_ONLY=""
 for arg in "$@"; do
   case "$arg" in
     --from=*) FROM="${arg#--from=}" ;;
+    --to=*) TO="${arg#--to=}" ;;
     --check) CHECK_ONLY=1 ;;
     --manifest) MANIFEST_ONLY=1 ;;
     --help|-h) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -54,6 +56,17 @@ wizard() {
   read -rp "Chat id владельца (от @userinfobot): " TG_CHAT_ID
   read -rp "Домен (можно пусто, если ставим только ядро): " DOMAIN
   read -rp "Cloudflare API-токен (можно пусто): " CF_API_TOKEN
+  PANGOLIN_SETUP_MODE="manual"
+  if [ -n "$DOMAIN" ]; then
+    read -rp "Pangolin: настроить админа, сайты и доступ к Komodo автоматически? [Y/n]: " x
+    case "${x:-y}" in y|Y) PANGOLIN_SETUP_MODE="auto" ;; n|N) PANGOLIN_SETUP_MODE="manual" ;; *) echo 'Ответьте y или n'; exit 1 ;; esac
+    read -rsp "Лицензия Pangolin EE (если есть; Enter = без неё): " pangolin_license </dev/tty; echo
+    if [ -n "$pangolin_license" ]; then
+      install -d -m 700 "$HERE/secrets"
+      (umask 077; printf '%s' "$pangolin_license" > "$HERE/secrets/pangolin-license.key")
+      unset pangolin_license
+    fi
+  fi
   read -rp "Ваш публичный ssh-ключ (пусто = оставить парольный вход): " USER_SSH_KEY
   read -rp "Профиль ресурсов S/M/L [L]: " x; PROFILE="${x:-L}"
   {
@@ -70,11 +83,13 @@ wizard() {
     echo "TG_CHAT_ID=\"$TG_CHAT_ID\""
     echo "DOMAIN=\"$DOMAIN\""
     echo "CF_API_TOKEN=\"$CF_API_TOKEN\""
+    echo "PANGOLIN_SETUP_MODE=\"$PANGOLIN_SETUP_MODE\""
     echo "USER_SSH_KEY=\"$USER_SSH_KEY\""
     echo "PROFILE=\"$PROFILE\""
     echo "BACKUP_WINDOWS=\"\""
     echo "SSH_KEY=\"\$HOME/.ssh/id_ed25519\""
   } > "$CONF"
+  chmod 600 "$CONF"
   echo "Инвентарь сохранён: $CONF"
   INV="$CONF"
 }
@@ -190,8 +205,32 @@ step_db()       { step "Слой баз данных";      bash "$HERE/db-up.sh
 step_backup()   { step "Бэкапы 3-2-1";         bash "$HERE/backup-up.sh"; }
 step_tgbot()    { step "Telegram-бот и дозор"; bash "$HERE/tgbot-up.sh"; }
 step_dns()      { step "DNS и сертификаты";    run_script dns-up.sh "DNS"; }
-step_pangolin() { step "Pangolin (доступ к сервисам)"; run_script pangolin-up.sh "Pangolin"; }
-step_komodo()   { step "Komodo (управление серверами)"; run_script komodo-up.sh "Komodo"; }
+step_pangolin() {
+  step "Pangolin (доступ к сервисам)"
+  run_script pangolin-up.sh "Pangolin"
+  if [ "${PANGOLIN_SETUP_MODE:-manual}" = auto ] && [ -n "${DOMAIN:-}" ]; then
+    lic=()
+    [ ! -s "$SECRETS/pangolin-license.key" ] || lic=(--license-file "$SECRETS/pangolin-license.key")
+    python3 "$ROOT/scripts/pangolin-bootstrap.py" --url "https://pangolin.$DOMAIN" \
+      --email "${EMAIL:-admin@$DOMAIN}" --org-id cluster "${lic[@]}"
+    sites=(--url "https://pangolin.$DOMAIN" --org-id cluster)
+    for a in $(node_names); do sites+=(--node "$a"); done
+    python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}"
+    bash "$HERE/pangolin-agents.sh"
+    python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}" --status
+  fi
+}
+step_komodo() {
+  step "Komodo (управление серверами)"
+  run_script komodo-up.sh "Komodo"
+  if [ "${PANGOLIN_SETUP_MODE:-manual}" = auto ] && [ -n "${DOMAIN:-}" ]; then
+    python3 "$ROOT/scripts/pangolin-resources.py" --url "https://pangolin.$DOMAIN" \
+      --org-id cluster --domain "$DOMAIN" \
+      --spec "komodo:$CONTROL:127.0.0.1:9120:http:9120:/" \
+      --repair-ip "$(node_ip "$(node_names | head -1)")"
+    bash "$HERE/pangolin-resource-certs.sh" komodo
+  fi
+}
 step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; run_script remnawave-up.sh "Remnawave+маски"; }
 step_check()    { step "Автоприёмка";          bash "$HERE/install-check.sh"; }
 step_handover() { step "Памятка владельца";    bash "$HERE/handover.sh"; }
@@ -226,6 +265,10 @@ if [ -n "$MANIFEST_ONLY" ]; then
 fi
 
 STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave check handover harden)
+for choice in "$FROM" "$TO"; do
+  [ -z "$choice" ] && continue
+  [[ " ${STEPS[*]} " == *" $choice "* ]] || fail "неизвестный шаг: $choice"
+done
 started=1
 [ -n "$FROM" ] && started=0
 for s in "${STEPS[@]}"; do
@@ -233,17 +276,22 @@ for s in "${STEPS[@]}"; do
   [ "$started" = 1 ] || continue
   [ -n "$CHECK_ONLY" ] && [ "$s" != check ] && continue
   "step_${s}"
+  [ "$s" != "$TO" ] || break
 done
 
 echo
 echo "=========================================="
 if [ -z "$CHECK_ONLY" ]; then
-  echo "УСТАНОВКА ЗАВЕРШЕНА. Что дальше:"
-  echo " 1. сверьте отчёт автоприёмки выше — все ✓?"
-  echo " 2. 🔐 ПАМЯТКА ВЛАДЕЛЬЦА уже в Telegram: все пароли, ключи, ссылки и секреты."
-  echo "    Сохраните её в надёжном месте (менеджер паролей / печать); копия на сервере:"
-  echo "    /root/321r-pamyatka-*.txt (права 600)."
-  echo " 3. панели (Pangolin/Remnawave/Komodo) — по докам docs/, если они вам нужны;"
-  echo " 4. дриллы и эксплуатация — V1/17, V1/21; бот — @ваш_бот."
+  if [ -n "$TO" ] && [ "$TO" != harden ]; then
+    echo "ДО ШАГА $TO ВКЛЮЧИТЕЛЬНО — ГОТОВО. Остальные шаги не запускались."
+  else
+    echo "УСТАНОВКА ЗАВЕРШЕНА. Что дальше:"
+    echo " 1. сверьте отчёт автоприёмки выше — все ✓?"
+    echo " 2. 🔐 ПАМЯТКА ВЛАДЕЛЬЦА уже в Telegram: все пароли, ключи, ссылки и секреты."
+    echo "    Сохраните её в надёжном месте (менеджер паролей / печать); копия на сервере:"
+    echo "    /root/321r-pamyatka-*.txt (права 600)."
+    echo " 3. панели (Pangolin/Remnawave/Komodo) — по докам docs/, если они вам нужны;"
+    echo " 4. дриллы и эксплуатация — V1/17, V1/21; бот — @ваш_бот."
+  fi
 fi
 echo "Повторная проверка: ./install.sh --check"

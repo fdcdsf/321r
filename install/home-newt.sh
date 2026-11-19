@@ -37,7 +37,7 @@ fi
 bin="$(command -v newt || true)"
 [ -n "$bin" ] || { echo 'Установщик Newt не создал бинарник' >&2; exit 1; }
 
-cat > /etc/systemd/system/321r-home-newt.service <<EOF
+cat > /etc/systemd/system/321r-newt.service <<EOF
 [Unit]
 Description=321r Newt — исходящий туннель из домашнего LXC к Pangolin
 Wants=network-online.target
@@ -57,9 +57,9 @@ PrivateTmp=true
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now 321r-home-newt.service >/dev/null
-systemctl is-active --quiet 321r-home-newt.service || {
-  echo 'Newt не запустился: journalctl -u 321r-home-newt.service -n 30' >&2; exit 1;
+systemctl enable --now 321r-newt.service >/dev/null
+systemctl is-active --quiet 321r-newt.service || {
+  echo 'Newt не запустился: journalctl -u 321r-newt.service -n 30' >&2; exit 1;
 }
 echo 'Newt запущен. Проверьте статус сайта в Pangolin (должен быть Online).'
-echo 'Порты домашнего роутера открывать не требуется.'
+echo 'Туннель исходящий; входящие порты для Newt открывать не требуется.'

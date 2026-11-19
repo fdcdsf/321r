@@ -17,6 +17,7 @@ class FakeApi:
     def __init__(self, already=False):
         self.already = already
         self.orgs = []
+        self.license_keys = []
         self.calls = []
 
     def request(self, method, path, body=None):
@@ -28,6 +29,10 @@ class FakeApi:
             self.already = True
         if path == "/orgs":
             return self.orgs
+        if path == "/license/keys":
+            return self.license_keys
+        if path == "/license/activate":
+            self.license_keys.append({"active": True})
         if path == "/pick-org-defaults":
             return {"subnet": "100.90.0.0/16", "utilitySubnet": "100.96.0.0/16"}
         if path == "/org":
@@ -55,6 +60,16 @@ class BootstrapTest(unittest.TestCase):
             api = FakeApi(already=True)
             self.assertFalse(module.bootstrap(api, "admin@example.com", "cluster", Path(td) / "admin.json"))
             self.assertEqual(api.calls, [("GET", "/auth/initial-setup-complete")])
+
+    def test_license_applied_only_once(self):
+        with tempfile.TemporaryDirectory() as td, patch.object(module, "setup_token", return_value="test-token"):
+            api = FakeApi()
+            secret = Path(td) / "admin.json"
+            license_file = Path(td) / "license.key"
+            license_file.write_text("test-license", encoding="utf-8")
+            module.bootstrap(api, "admin@example.com", "cluster", secret, license_file)
+            module.bootstrap(api, "admin@example.com", "cluster", secret, license_file)
+            self.assertEqual(api.calls.count(("POST", "/license/activate")), 1)
 
 
 if __name__ == "__main__":

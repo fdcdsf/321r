@@ -83,7 +83,29 @@ def setup_token():
     return found[-1]
 
 
-def bootstrap(api, email, org_id, secret_file):
+def apply_license(api, license_file):
+    if not license_file:
+        return
+    path = Path(license_file)
+    if not path.is_file():
+        raise ApiError("файл лицензии Pangolin не найден")
+    if os.name == "posix" and path.stat().st_mode & 0o077:
+        raise ApiError("слишком широкие права файла лицензии Pangolin")
+    key = path.read_text(encoding="utf-8").strip()
+    if not key or len(key) > 255:
+        raise ApiError("ключ лицензии пуст или слишком длинный")
+    existing = api.request("GET", "/license/keys")
+    if existing:
+        # Не заменять лицензию владельца при повторном запуске установщика.
+        print("Pangolin: лицензия уже заведена; не меняю")
+        return
+    status = api.request("POST", "/license/activate", {"licenseKey": key})
+    if isinstance(status, dict) and status.get("isLicenseValid") is False:
+        raise ApiError("Pangolin не подтвердил действительность лицензии")
+    print("Pangolin: лицензия активирована")
+
+
+def bootstrap(api, email, org_id, secret_file, license_file=None):
     state = api.request("GET", "/auth/initial-setup-complete") or {}
     if not state.get("complete"):
         creds = load_credentials(secret_file, email)
@@ -99,6 +121,7 @@ def bootstrap(api, email, org_id, secret_file):
 
     creds = load_credentials(secret_file, email)
     api.request("POST", "/auth/login", creds)
+    apply_license(api, license_file)
     orgs = api.request("GET", "/orgs")
     if isinstance(orgs, dict):
         orgs = orgs.get("orgs", [])
@@ -124,6 +147,7 @@ def main():
     parser.add_argument("--email", required=True)
     parser.add_argument("--org-id", default="cluster")
     parser.add_argument("--secret-file", default="/etc/db/secrets/pangolin-admin.json")
+    parser.add_argument("--license-file", help="файл с ключом EE (chmod 600); без файла активация пропускается")
     parser.add_argument("--check", action="store_true", help="только проверить статус онбординга")
     args = parser.parse_args()
     try:
@@ -132,7 +156,7 @@ def main():
             state = api.request("GET", "/auth/initial-setup-complete") or {}
             print("Pangolin: первичная настройка " + ("пройдена" if state.get("complete") else "не пройдена"))
             return 0
-        return 0 if bootstrap(api, args.email, args.org_id, args.secret_file) else 2
+        return 0 if bootstrap(api, args.email, args.org_id, args.secret_file, args.license_file) else 2
     except (ApiError, ValueError) as exc:
         print(f"Pangolin: {exc}", file=sys.stderr)
         return 1

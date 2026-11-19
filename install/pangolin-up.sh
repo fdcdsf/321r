@@ -71,7 +71,7 @@ done
 for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
 [ "$bad" = 0 ] || fail "сертификат дашборда не выдан на всех нодах — смотрите вывод certbot"
 
-step "Рендер /opt/pangolin и подъём (панель → gerbil/traefik)"
+step "Рендер /opt/pangolin (без запуска: миграции БД выполняет одна нода)"
 pids=(); bad=0
 for a in $(node_names); do
   (
@@ -99,14 +99,67 @@ for a in $(node_names); do
       sed -e 's|__EMAIL__|$EMAIL|g' traefik_config.yml.tmpl > config/traefik/traefik_config.yml
       sed -e 's|__MESH_IP__|$(node_mesh "$a")|g' -e 's|__TRUSTED__|$TRUSTED|g' \
           docker-compose.yml.tmpl > docker-compose.yml
-      chmod 600 config/config.yml config/privateConfig.yml
-      docker compose up -d"
-    echo "панель поднята"
+      chmod 600 config/config.yml config/privateConfig.yml"
+    echo "конфиги готовы"
   ) 2>&1 | sed "s/^/[$a] /" &
   pids+=($!)
 done
 for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
-[ "$bad" = 0 ] || fail "Pangolin поднялся не на всех нодах — смотрите вывод"
+[ "$bad" = 0 ] || fail "конфиги Pangolin разложены не на все ноды — смотрите вывод"
+
+# Находка 39 (чистая БД, 2026-11-19): если все три контейнера стартуют
+# одновременно, каждый запускает drizzle migrations.mjs. В общей БД гонка
+# CREATE TABLE / versionMigrations → два контейнера становятся unhealthy.
+# Один мигрирует и полностью запускает API, только потом стартуют остальные.
+wait_pangolin() {
+  local a="$1" st="" i
+  for i in $(seq 1 60); do
+    st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+    [ "$st" = healthy ] && { ok "$a: панель healthy"; return 0; }
+    sleep 5
+  done
+  fail "$a: Pangolin не стал healthy (последний статус: $st); смотрите docker logs pangolin"
+}
+
+FIRST="$(node_names | head -1)"
+step "Миграции Pangolin — только $FIRST"
+nssh "$FIRST" 'cd /opt/pangolin && docker compose up -d pangolin' >/dev/null
+# Повторный запуск после неудачной параллельной миграции: compose не ретраит
+# уже созданный unhealthy-контейнер. Перезапускаем ТОЛЬКО панель, не gerbil.
+st="$(nssh "$FIRST" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+[ "$st" != unhealthy ] || nssh "$FIRST" 'docker restart pangolin >/dev/null'
+wait_pangolin "$FIRST"
+
+step "Pangolin на остальных нодах (схема БД уже готова)"
+for a in $(node_names); do
+  [ "$a" = "$FIRST" ] && continue
+  nssh "$a" 'cd /opt/pangolin && docker compose up -d pangolin' >/dev/null
+  st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+  [ "$st" != unhealthy ] || nssh "$a" 'docker restart pangolin >/dev/null'
+  wait_pangolin "$a"
+done
+
+step "Gerbil и Traefik (после готовности всех панелей)"
+for a in $(node_names); do
+  nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null
+  ok "$a: стек запущен"
+done
+
+step "Восстановление TCP-масок после переустановки Pangolin"
+# Урок 40: маски лежат в dynamic/ Pangolin. После чистого переустановления каталог
+# пустой — браузер панели работает, а mtproto/VPN на :443 незаметно пропадают.
+# Gateway сети Docker на каждой ноде свой (например, c=172.21.0.1, а не 172.22.0.1).
+if [ -f "$ROOT/deploy/harvest/mask_config.yml" ]; then
+  for a in $(node_names); do
+    if nssh "$a" 'systemctl is-active --quiet mtproto-proxy.service'; then
+      gw="$(nssh "$a" "docker network inspect pangolin --format '{{(index .IPAM.Config 0).Gateway}}'")"
+      [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$a: не найден gateway Docker-сети pangolin"
+      sed -e "s/321r\.ru/$DOMAIN/g" -e "s/172\.22\.0\.1/$gw/g" "$ROOT/deploy/harvest/mask_config.yml" \
+        | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
+      ok "$a: маски восстановлены (Docker gateway $gw)"
+    fi
+  done
+fi
 
 step "Лечение багов Pangolin (wildcard-repair) + cron"
 for a in $(node_names); do
@@ -159,14 +212,13 @@ for a in $(node_names); do
   esac
 done
 
-cat <<EOF
-
+if [ "${PANGOLIN_SETUP_MODE:-manual}" = auto ]; then
+  echo "Pangolin и сертификат дашборда готовы. Дальше установщик автоматически создаст админа, организацию и сайты; лицензию EE владелец вводит сам."
+else
+  cat <<EOF
   Pangolin поднят на всех нодах, сертификат дашборда — Let's Encrypt (certbot).
-  Осталось руками (V1/00 → docs/pangolin-wildcard.md):
-   1. открыть https://pangolin.$DOMAIN и пройти первичный онбординг (админ + 2FA).
-      Код первичной настройки (setup token) — в памятке владельца, а если её нет:
-        docker logs pangolin | grep -A1 "SETUP TOKEN"
-   2. ввести EE-лицензию (панель → Settings);
-   3. создать сайты cluster-<имя> нод и заложить их агенты (pangolin up site);
-   4. ресурсы (komodo/rem/sub) — через панель или API с полным HC-набором.
+  Ручной режим: открыть https://pangolin.$DOMAIN и пройти первичный онбординг (админ + 2FA).
+  Код первичной настройки — в памятке или docker logs pangolin | grep -A1 'SETUP TOKEN'.
+  Затем ввести EE-лицензию (панель → Settings), создать сайты и ресурсы.
 EOF
+fi

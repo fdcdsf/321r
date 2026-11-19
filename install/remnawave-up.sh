@@ -196,7 +196,10 @@ step "Traefik-маска (passthrough vpn-* и tg)"
 # netns gerbil). Динамические конфиги traefik перечитываются сами — достаточно
 # рестарта самого traefik (gerbil не трогаем: его одиночный рестарт рвёт ingress).
 for a in $(node_names); do
-  sed -e "s/321r\.ru/$DOMAIN/g" "$H/mask_config.yml" | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
+  gw="$(nssh "$a" "docker network inspect pangolin --format '{{(index .IPAM.Config 0).Gateway}}'")"
+  [[ "$gw" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "$a: не найден gateway Docker-сети pangolin"
+  sed -e "s/321r\.ru/$DOMAIN/g" -e "s/172\.22\.0\.1/$gw/g" "$H/mask_config.yml" \
+    | nssh "$a" 'cat > /opt/pangolin/config/dynamic/mask_config.yml'
   nssh "$a" 'docker restart traefik >/dev/null 2>&1 || true' &
 done
 wait

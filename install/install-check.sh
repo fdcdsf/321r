@@ -120,6 +120,23 @@ else
   warn_c "DOMAIN пуст — панель не ставится, сертификат не проверяем"
 fi
 
+if [ "${PANGOLIN_SETUP_MODE:-manual}" = auto ] && [ -n "${DOMAIN:-}" ]; then
+  echo "== 14. Авто-Pangolin: Newt и сертификат ресурса =="
+  site_args=()
+  for a in $(node_names); do site_args+=(--node "$a"); done
+  if python3 "$ROOT/scripts/pangolin-sites.py" --url "https://pangolin.$DOMAIN" \
+      --org-id cluster "${site_args[@]}" --status; then
+    ok_c "сайты Newt online на всех нодах"
+  else
+    fail_c "сайты Newt не все online"
+  fi
+  for a in $(node_names); do
+    code="$(nssh "$a" "curl -sS -o /dev/null -w '%{http_code}' --max-time 12 --resolve komodo.$DOMAIN:443:127.0.0.1 https://komodo.$DOMAIN/ 2>/dev/null" || true)"
+    [ "$code" = 200 ] && ok_c "$a: Komodo через Pangolin — HTTPS 200 с проверкой сертификата" \
+      || fail_c "$a: Komodo HTTPS не принят (HTTP ${code:-нет}; проверьте wildcard-сертификат и лицензию)"
+  done
+fi
+
 echo
 echo "=========================================="
 echo "ИТОГ: ✓ $PASS  ! $WARN  ✗ $FAILN"
