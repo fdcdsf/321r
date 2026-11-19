@@ -155,6 +155,24 @@ if [ -n "${DOMAIN:-}" ]; then
   done
 fi
 
+if [ "${REMNAWAVE_MODE:-install}" = install ] && [ -n "${DOMAIN:-}" ]; then
+  echo "== 16. Человеческая страница подписки (не сырой /api/sub) =="
+  short="$(basename "$(cat /etc/db/secrets/remnawave-probe-url 2>/dev/null || echo missing)")"
+  if [[ "$short" =~ ^[a-zA-Z0-9_-]{6,80}$ ]] && [ "$short" != missing ]; then
+    for a in $(node_names); do
+      if nssh "$a" "curl -fsS --max-time 15 --resolve 'sub.$DOMAIN:443:127.0.0.1' \
+        -H 'Accept: text/html' -A 'Mozilla/5.0 Chrome/124.0.0.0' \
+        'https://sub.$DOMAIN/$short' 2>/dev/null | grep -qi '<html'"; then
+        ok_c "$a: красивая HTML-страница sub.$DOMAIN открывается"
+      else
+        fail_c "$a: страница sub.$DOMAIN не отдаёт HTML"
+      fi
+    done
+  else
+    fail_c "нет пробной подписки для проверки красивой страницы"
+  fi
+fi
+
 echo
 echo "=========================================="
 echo "ИТОГ: ✓ $PASS  ! $WARN  ✗ $FAILN"

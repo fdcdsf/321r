@@ -28,6 +28,10 @@ if [ -s /etc/db/secrets/remnawave-admin.json ]; then
   RW_ADMIN="$(python3 -c 'import json; d=json.load(open("/etc/db/secrets/remnawave-admin.json")); print(d["username"] + " / " + d["password"])')"
 fi
 RW_PROBE="$(cat /etc/db/secrets/remnawave-probe-url 2>/dev/null || echo '(пока не настроена)')"
+RW_PAGE="(домашняя страница подписки ещё не подключена)"
+if [ "${REMNAWAVE_MODE:-install}" = install ] && [ -s /etc/db/secrets/remnawave-probe-url ] && [ -n "${DOMAIN:-}" ]; then
+  RW_PAGE="https://sub.$DOMAIN/${RW_PROBE##*/}"
+fi
 K_ADMIN="$(nssh "$CTRL" "grep '^KOMODO_INIT_ADMIN_PASSWORD=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_JWT="$(nssh "$CTRL" "grep '^KOMODO_JWT_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
 K_WEBHOOK="$(nssh "$CTRL" "grep '^KOMODO_WEBHOOK_SECRET=' /etc/db/secrets/komodo.env | cut -d= -f2-")"
@@ -115,7 +119,8 @@ $K_CORE_KEY
   Режим:       ${REMNAWAVE_MODE:-install}
   Панель:      ${REMNAWAVE_PANEL_URL:-https://rem.${DOMAIN:-<ваш-домен>}}
   Вход:        $RW_ADMIN
-  Пробная подписка: $RW_PROBE
+  Красивая страница для человека: $RW_PAGE
+  Сырая подписка для VPN-приложения: $RW_PROBE
   БД панели (только install): $RW_PASS
   APP_SECRET (только install): /opt/remnawave/.env на control
 

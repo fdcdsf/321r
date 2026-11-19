@@ -5,6 +5,12 @@
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 [ -n "${DOMAIN:-}" ] || fail "нет DOMAIN"
+CHECK_PATH="/"
+if [[ "${1:-}" == --check-path=* ]]; then
+  CHECK_PATH="${1#--check-path=}"
+  [[ "$CHECK_PATH" =~ ^/[a-zA-Z0-9_-]{1,80}$ ]] || fail "неверный путь проверки ресурса"
+  shift
+fi
 [ "$#" -gt 0 ] || fail "укажите минимум один ресурс (например komodo)"
 
 for name in "$@"; do
@@ -28,11 +34,11 @@ for name in "$@"; do
         mv -f \"\$f.tmp\" \"\$f\"
         for i in \$(seq 1 36); do
           curl -fsS -o /dev/null --max-time 12 \
-            --resolve '$host:443:127.0.0.1' 'https://$host/' 2>/dev/null && break
+            --resolve '$host:443:127.0.0.1' 'https://$host$CHECK_PATH' 2>/dev/null && break
           sleep 5
         done
         curl -fsS -o /dev/null --max-time 12 \
-          --resolve '$host:443:127.0.0.1' 'https://$host/' 2>/dev/null
+          --resolve '$host:443:127.0.0.1' 'https://$host$CHECK_PATH' 2>/dev/null
         echo 'сертификат $host выдан, traefik отдаёт доверенный TLS'"
     ) 2>&1 | sed "s/^/[$a] /" &
     pids+=($!)

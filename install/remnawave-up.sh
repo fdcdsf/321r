@@ -278,5 +278,38 @@ mask_args=()
 for a in $(node_names); do mask_args+=(--node "$a"); done
 python3 "$ROOT/scripts/remnawave-mask.py" "${args[@]}" --domain "$DOMAIN" "${mask_args[@]}"
 ok "профиль, ноды и минимальная подписка настроены в режиме $MODE"
-echo "Пробная подписка — /etc/db/secrets/remnawave-probe-url на первом сервере."
+if [ "$MODE" = install ]; then
+  step "Красивая страница подписки (официальный subscription-page)"
+  python3 "$ROOT/scripts/remnawave-subpage.py" --panel-url "$PANEL_URL" \
+    --control-ip "$(node_mesh "$CTRL")" --ssh-key "$SSH_KEY" \
+    --compose "$H/subpage-compose.yml"
+  raw="$(cat /etc/db/secrets/remnawave-probe-url)"
+  short="${raw##*/}"
+  [[ "$short" =~ ^[a-zA-Z0-9_-]+$ ]] || fail "неверный shortUuid пробной подписки"
+  sub_ok=""
+  for i in $(seq 1 36); do
+    if nssh "$CTRL" "curl -fsS -o /dev/null --max-time 8 -H 'X-Forwarded-For: 127.0.0.1' \
+         -H 'X-Forwarded-Proto: https' -H 'Host: sub.$DOMAIN' \
+         -H 'Accept: text/html' -A 'Mozilla/5.0 Chrome/124.0.0.0' \
+         'http://127.0.0.1:3011/$short' 2>/dev/null"; then
+      sub_ok=1; break
+    fi
+    sleep 5
+  done
+  [ -n "$sub_ok" ] || fail "страница подписки :3011 не отвечает"
+  python3 "$ROOT/scripts/pangolin-resources.py" --url "https://pangolin.$DOMAIN" \
+    --org-id cluster --domain "$DOMAIN" \
+    --spec "sub:$CTRL:127.0.0.1:3010:http:3011:/$short" \
+    --repair-ip "$(node_ip "$(node_names | head -1)")"
+  bash "$HERE/pangolin-resource-certs.sh" "--check-path=/$short" sub
+  # В браузере показываем UI; /api/sub/<shortUuid> остаётся для VPN-клиентов.
+  for a in $(node_names); do
+    response="$(nssh "$a" "curl -fsS --max-time 15 -o /dev/null -w '%{http_code}' \
+      --resolve 'sub.$DOMAIN:443:127.0.0.1' -H 'Accept: text/html' \
+      -A 'Mozilla/5.0 Chrome/124.0.0.0' 'https://sub.$DOMAIN/$short' 2>/dev/null" || true)"
+    [ "$response" = 200 ] || fail "$a: красивая страница не отвечает (HTTP ${response:-нет})"
+  done
+  ok "страница https://sub.$DOMAIN/<shortUuid> работает через каждую ноду"
+fi
+echo "Пробная подписка (сырой формат для клиента) — /etc/db/secrets/remnawave-probe-url."
 echo "Ссылка маски Telegram — в памятке владельца (FakeTLS)."
