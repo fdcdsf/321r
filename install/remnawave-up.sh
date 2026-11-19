@@ -141,25 +141,55 @@ for a in $(node_names); do
 done
 for pid in "${pids[@]}"; do wait "$pid" || true; done
 
-step "Egress Telegram из РФ через $CTRL"
-nssh "$CTRL" 'sysctl -qw net.ipv4.ip_forward=1
-  grep -q net.ipv4.ip_forward /etc/sysctl.d/99-321r.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.d/99-321r.conf
-  cp /usr/local/bin/mesh-egress.sh /usr/local/bin/mesh-egress.sh 2>/dev/null || true'
-ncp "$CTRL" "$H/mesh-egress.sh" /usr/local/bin/mesh-egress.sh
-ncp "$CTRL" "$H/mesh-egress.service" /etc/systemd/system/mesh-egress.service
-nssh "$CTRL" 'chmod +x /usr/local/bin/mesh-egress.sh
-  IFACE=$(ip route get 1.1.1.1 | grep -oP "dev \K\S+")
-  ufw route allow in on wg0 out on "$IFACE" >/dev/null 2>&1 || true
-  systemctl daemon-reload && systemctl enable --now mesh-egress.service >/dev/null 2>&1'
-# маршруты Telegram-диапазонов через шлюз: AllowedIPs пира шлюза в wg0.conf РФ-ноды
-nssh "$RU_NODE" "sed -i 's|AllowedIPs = $GW_MESH/32|AllowedIPs = $GW_MESH/32, 91.108.4.0/22, 91.108.8.0/22, 91.108.56.0/22, 149.154.160.0/20|' /etc/amnezia/amneziawg/wg0.conf
-  systemctl restart awg0.service"
-sed -e "s/10\.66\.0\.2/$GW_MESH/g" "$H/tg-egress.sh" | nssh "$RU_NODE" 'cat > /usr/local/bin/tg-egress.sh'
-ncp "$RU_NODE" "$H/tg-egress.service" /etc/systemd/system/tg-egress.service
-nssh "$RU_NODE" 'chmod +x /usr/local/bin/tg-egress.sh
-  systemctl daemon-reload && systemctl enable --now tg-egress.service >/dev/null 2>&1
-  /usr/local/bin/tg-egress.sh'
-ok "$RU_NODE: Telegram-трафик уходит через $CTRL (mesh-egress на шлюзе)"
+step "WARP-туннель для mtproto (обход РКН; только mtproto)"
+# Урок 2026-11-18: старая схема «tg-egress/mesh-egress через ноду-шлюз» не работает —
+# все ноды кластера в РФ (проверено: geo RU у всех), чужой egress не спасает. WARP
+# (обфусцированный WireGuard до Cloudflare) выводит трафик mtproto наружу с IP Cloudflare.
+# Через WARP идёт ТОЛЬКО mtproto.zig (fwmark по uid пользователя mtproto), нода не страдает.
+for a in $(node_names); do
+  ncp "$a" "$ROOT/scripts/warp-321r.sh" /usr/local/bin/warp-321r.sh
+  ncp "$a" "$H/warp.service" /etc/systemd/system/warp.service
+  nssh "$a" 'chmod +x /usr/local/bin/warp-321r.sh
+    systemctl daemon-reload
+    systemctl enable warp.service >/dev/null 2>&1 || true'
+done
+# WARP-конфиг: из инвентаря (WARP_CONF — путь к файлу на мастере) или уже лежит на ноде
+if [ -n "${WARP_CONF:-}" ] && [ -f "$WARP_CONF" ]; then
+  for a in $(node_names); do
+    ncp "$a" "$WARP_CONF" /etc/amnezia/amneziawg/warp.conf
+    nssh "$a" 'chmod 600 /etc/amnezia/amneziawg/warp.conf'
+  done
+  ok "WARP-конфиг разложен по нодам (из $WARP_CONF)"
+else
+  warn "WARP_CONF не задан и конфига нет — mtproto без обхода (включите позже через бота)"
+fi
+pids=()
+for a in $(node_names); do
+  (
+    if nssh "$a" '[ -f /etc/amnezia/amneziawg/warp.conf ]'; then
+      nssh "$a" 'systemctl start warp.service >/dev/null 2>&1 || true
+        sleep 1; /usr/local/bin/warp-321r.sh status' || echo "warp: не поднялся (см. awg show warp)"
+    else
+      echo "warp: нет конфига — пропущен"
+    fi
+  ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
+done
+for pid in "${pids[@]}"; do wait "$pid" || true; done
+# старую схему сносим целиком (юниты, скрипты, маршруты, правку AllowedIPs в wg0.conf)
+for a in $(node_names); do
+  nssh "$a" 'systemctl disable --now tg-egress.service mesh-egress.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/tg-egress.service /etc/systemd/system/mesh-egress.service
+    rm -f /usr/local/bin/tg-egress.sh /usr/local/bin/mesh-egress.sh
+    systemctl daemon-reload
+    ip route del 91.108.4.0/22 2>/dev/null || true
+    ip route del 91.108.8.0/22 2>/dev/null || true
+    ip route del 91.108.56.0/22 2>/dev/null || true
+    ip route del 149.154.160.0/20 2>/dev/null || true'
+done
+nssh "$RU_NODE" "sed -i 's|, 91.108.4.0/22, 91.108.8.0/22, 91.108.56.0/22, 149.154.160.0/20||' /etc/amnezia/amneziawg/wg0.conf
+  systemctl restart awg0.service" >/dev/null 2>&1 || warn "$RU_NODE: не удалось откатить AllowedIPs в wg0.conf"
+ok "старая схема egress через $CTRL удалена; mtproto теперь через WARP"
 
 step "Traefik-маска (passthrough vpn-* и tg)"
 # Урок: force-recreate gerbil/traefik через compose НАДЕЖНО зависает (traefik живёт в

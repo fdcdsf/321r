@@ -77,6 +77,20 @@ def grid(rows):
 
 
 BACK = ("◀ В меню", "m:main")
+PEND = "/var/lib/tgbot/warp-pending.json"
+
+
+def pend_set(node, chat_id):
+    os.makedirs(os.path.dirname(PEND), exist_ok=True)
+    with open(PEND, "w", encoding="utf-8") as f:
+        json.dump({"node": node, "chat": str(chat_id), "ts": int(time.time())}, f)
+
+
+def pend_get():
+    try:
+        return json.load(open(PEND, encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 # ================= СНИМОК КЛАСТЕРА (сбор раз в сутки или по кнопке) =================
@@ -93,6 +107,7 @@ def collect():
             ("backup", "/usr/local/bin/tg-info.sh backup"),
             ("certs", "/usr/local/bin/tg-info.sh certs"),
             ("local", "/usr/local/bin/tg-info.sh services"),
+            ("warp", "/usr/local/bin/warp-321r.sh stats 2>/dev/null || true"),
         ]:
             one[key] = sh("%s root@%s '%s'" % (SSH, ip, cmd), timeout=45)
         one["containers"] = sh("%s root@%s 'docker ps -a --format \"{{.Names}}|{{.Status}}\"'" % (SSH, ip), timeout=20).splitlines()
@@ -183,7 +198,8 @@ def scr_main():
                   [("🧩 Приложения", "m:apps"), ("📦 Контейнеры", "m:ctop")],
                   [("💾 Бэкапы", "m:backup"), ("🗄 Базы данных", "m:db")],
                   [("🖥 Серверы", "m:srv"), ("📜 Логи", "m:logs")],
-                  [("⚙ Действия", "m:act"), ("ℹ Помощь", "m:help")]]))
+                  [("🛡 WARP/mtproto", "m:warp"), ("⚙ Действия", "m:act")],
+                  [("ℹ Помощь", "m:help")]]))
 
 
 def stamp(s):
@@ -210,6 +226,47 @@ def scr_services(_=""):
         lines.append("【%s】 %s" % (name, " · ".join(x.strip() for x in one.get("local", "").splitlines() if x.strip())))
     return ("\n".join(lines)[:3900],
             grid([[("🔄 Обновить", "r:m:services")], [BACK]]))
+
+
+def warp_state(one):
+    w = one.get("warp", "") or ""
+    return "up" if w.startswith("warp: up") else ("down" if w.startswith("warp: down") else "?")
+
+
+def warp_icon(st):
+    return {"up": "🟢", "down": "⚪"}.get(st, "❔")
+
+
+def scr_warp(_=""):
+    s = snap()
+    lines = ["🛡 WARP/mtproto · обход блокировки Telegram (РФ) через Cloudflare WARP", stamp(s), ""]
+    for name, one in s["nodes"].items():
+        body = " · ".join(x.strip() for x in (one.get("warp") or "").splitlines() if x.strip()) or "нет данных"
+        lines.append("【%s】 %s %s" % (name, warp_icon(warp_state(one)), body))
+    rows = []
+    ns = [n for n, _ in cluster_nodes()]
+    for i in range(0, len(ns), 2):
+        rows.append([("%s %s" % (n, warp_icon(warp_state(s["nodes"].get(n, {})))), "ask:warptoggle:" + n)
+                     for n in ns[i:i + 2]])
+    rows.append([("✅ Включить на всех", "ask:warpall:on"), ("⛔ Выключить на всех", "ask:warpall:off")])
+    rows.append([("📄 Заменить WARP-конфиг", "m:warp-cfg")])
+    rows.append([("🔄 Обновить", "r:m:warp")])
+    rows.append([BACK])
+    return ("\n".join(lines)[:3900], grid(rows))
+
+
+def scr_warp_cfg(_=""):
+    ns = cluster_nodes()
+    rows = [[(n, "p:warp-cfg:" + n) for n, _ in ns[i:i + 2]] for i in range(0, len(ns), 2)]
+    rows.append([("◀ Назад", "m:warp"), BACK])
+    return ("📄 Замена WARP-конфига — конфиг СВОЙ на каждую ноду.\n"
+            "Выберите ноду и отправьте файл .conf сюда: бот положит его на ноду и применит. "
+            "Если туннель не поднимется — автоматически откатит прежний.", grid(rows))
+
+
+def scr_warp_pend(arg):
+    return ("📄 Жду файл .conf для ноды %s — отправьте его сообщением." % arg,
+            grid([[("◀ Назад", "m:warp-cfg")]]))
 
 
 def scr_backup(_=""):
@@ -441,6 +498,10 @@ def scr_ask(arg):
     elif arg.startswith("move:"):
         _, app, f, to = arg.split(":", 3)
         t = "Перенести инстанс БД «%s» с %s на %s? (даунтайм ~10–20 с)" % (app, f, to)
+    elif arg.startswith("warptoggle:"):
+        t = "WARP на ноде %s: переключить (вкл/выкл)?" % arg.split(":", 1)[1]
+    elif arg.startswith("warpall:"):
+        t = ("Включить WARP на всех нодах?" if arg.endswith("on") else "Выключить WARP на всех нодах?")
     return (t, grid([[("✅ Да, выполнить", "do:" + arg)], [("❌ Отмена", "m:main")]]))
 
 
@@ -452,6 +513,7 @@ def scr_help(_=""):
             "· карточки приложений — авто-группы (БД + контейнеры по именам)\n\n"
             "Данные: снимок раз в сутки ИЛИ кнопка 🔄 Обновить на любом экране.\n"
             "Новое на серверах (контейнер/сервис/база/нода) появляется само после обновления.\n"
+            "🛡 WARP/mtproto — обход блокировки Telegram в РФ: вкл/выкл, статистика, замена конфига файлом.\n"
             "Алерты приходят сюда сами. Текстовые команды тоже работают.",
             grid([[BACK]]))
 
@@ -552,7 +614,8 @@ def render(data):
         return scr_ask(data[4:])
     table = {"m:main": scr_main, "m:status": scr_status, "m:services": scr_services,
              "m:backup": scr_backup, "m:db": scr_db, "m:ctop": scr_ctop, "m:apps": scr_apps,
-             "m:srv": scr_srv, "m:logs": scr_logs, "m:act": scr_act, "m:help": scr_help}
+             "m:srv": scr_srv, "m:logs": scr_logs, "m:act": scr_act, "m:help": scr_help,
+             "m:warp": scr_warp, "m:warp-cfg": scr_warp_cfg}
     f = table.get(data)
     return f() if f else scr_main()
 
@@ -595,6 +658,20 @@ def do_action(chat_id, action, msg_id=None):
         out = sh("/usr/local/bin/app-move.sh %s %s %s 2>&1 | tail -9" % (shlex.quote(app), shlex.quote(f), shlex.quote(to)), timeout=300)
         finish("↔ Перенос «%s»: %s → %s\n%s" % (app, f, to, out[:1600]))
         return
+    if action.startswith("warptoggle:"):
+        n = action.split(":", 1)[1]
+        st = sh("%s root@%s '/usr/local/bin/warp-321r.sh status 2>/dev/null'" % (SSH, node_ip(n)), timeout=15)
+        cmd = "down" if st.startswith("warp: up") else "up"
+        out = sh("%s root@%s '/usr/local/bin/warp-321r.sh %s 2>&1 | tail -2'" % (SSH, node_ip(n), cmd), timeout=120)
+        finish(("⛔ WARP выключен" if cmd == "down" else "✅ WARP включён") + " на %s\n%s" % (n, out[:800]))
+        return
+    if action.startswith("warpall:"):
+        cmd = "up" if action.endswith("on") else "down"
+        for n, ip in cluster_nodes():
+            sh("%s root@%s '/usr/local/bin/warp-321r.sh %s >/dev/null 2>&1 || true'" % (SSH, ip, cmd), timeout=120)
+        collect()
+        finish(("✅ WARP включён" if cmd == "up" else "⛔ WARP выключен") + " на всех нодах.")
+        return
     if action == "backup":
         for n, ip in cluster_nodes():
             sh("%s root@%s 'nohup /usr/local/bin/backup-321r.sh >/dev/null 2>&1 &'" % (SSH, ip), timeout=10)
@@ -628,6 +705,13 @@ def handle_callback(cb):
         pass
     log("tgbot: кнопка %r" % data)
     try:
+        if data.startswith("p:"):
+            node = data.split(":", 2)[2]
+            pend_set(node, chat_id)
+            text, keyboard = scr_warp_pend(node)
+            call("editMessageText", chat_id=chat_id, message_id=msg_id, text=text[:3900],
+                 reply_markup=json.dumps({"inline_keyboard": keyboard}))
+            return
         if data.startswith("do:"):
             do_action(chat_id, data[3:], msg_id)
             return
@@ -654,7 +738,7 @@ def handle_text(chat_id, text):
     cmd = parts[0].split("@")[0].lstrip("/") if text else ""
     alias = {"start": "m:main", "menu": "m:main", "help": "m:help", "status": "m:status",
              "services": "m:services", "backup": "m:backup", "db": "m:db", "disk": "m:srv",
-             "logs": "m:logs", "apps": "m:apps", "containers": "m:ctop"}
+             "logs": "m:logs", "apps": "m:apps", "containers": "m:ctop", "warp": "m:warp"}
     if cmd == "ping":
         try:
             call("sendMessage", chat_id=chat_id, text="pong · нода " + NODE)
@@ -681,6 +765,45 @@ def handle_text(chat_id, text):
                  reply_markup=json.dumps({"inline_keyboard": scr_main()[1]}))
         except Exception:
             pass
+
+
+def handle_document(chat_id, msg):
+    """Замена WARP-конфига: бот принимает .conf, кладёт на ноду, применяет с откатом."""
+    p = pend_get()
+    if not p or p.get("chat") != chat_id or time.time() - p.get("ts", 0) > 3600:
+        return
+    node, ip = p["node"], node_ip(p["node"])
+    doc = msg.get("document") or {}
+    fname = doc.get("file_name", "")
+    if not fname.endswith(".conf"):
+        try:
+            call("sendMessage", chat_id=chat_id, text="⚠ Жду .conf (WireGuard/AmneziaWG), а не «%s»." % fname)
+        except Exception:
+            pass
+        return
+    try:
+        r = call("getFile", file_id=doc["file_id"])
+        url = "https://api.telegram.org/file/bot%s/%s" % (TOKEN, r["result"]["file_path"])
+        local = "/tmp/warp-%s-%d.conf" % (node, int(time.time()))
+        urllib.request.urlretrieve(url, local)
+        sh("scp -q -P 2222 -o BatchMode=yes -o ConnectTimeout=8 %s root@%s:/tmp/warp-new.conf"
+           % (shlex.quote(local), ip), timeout=40)
+        res = sh("%s root@%s '/usr/local/bin/warp-321r.sh set-config /tmp/warp-new.conf 2>&1 | tail -4'"
+                 % (SSH, ip), timeout=120)
+        os.remove(local)
+        call("sendMessage", chat_id=chat_id, text=("✅ WARP-конфиг ноды %s:\n%s" % (node, res))[:3900])
+    except Exception as e:
+        log("tgbot: warp config: %s" % e)
+        try:
+            call("sendMessage", chat_id=chat_id, text="⚠ Конфиг не применён: %s" % e)
+        except Exception:
+            pass
+    finally:
+        try:
+            os.remove(PEND)
+        except Exception:
+            pass
+    collect()
 
 
 def main():
@@ -719,6 +842,9 @@ def main():
                 msg = u.get("message") or {}
                 chat_id = str(msg.get("chat", {}).get("id", ""))
                 if chat_id not in ALLOWED:
+                    continue
+                if "document" in msg:
+                    handle_document(chat_id, msg)
                     continue
                 handle_text(chat_id, (msg.get("text") or "").strip())
         except Exception:
