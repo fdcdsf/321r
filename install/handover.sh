@@ -27,6 +27,11 @@ K_ONBOARD="$(nssh "$CTRL" 'cat /etc/db/secrets/komodo-onboarding.key')"
 RESTIC="$(nssh "$CTRL" "grep '^RESTIC_PASSWORD=' /etc/db/secrets/restic.env | cut -d= -f2- | tr -d '\"'")"
 CLUSTER_KEY="$(cat "$SECRETS/id_cluster" 2>/dev/null || echo '(нет)')"
 MSEC="$(cat "$SECRETS/mtproto-secret" 2>/dev/null || echo '(нет)')"
+if [ -n "${DOMAIN:-}" ] && [[ "$MSEC" =~ ^[a-fA-F0-9]{32}$ ]]; then
+  MT_LINK="$(mtproto_link "tg.$DOMAIN" "$MSEC")"
+else
+  MT_LINK="(нет корректного секрета или домена — проверьте mtbuddy links на ноде)"
+fi
 TGTOK="${TG_BOT_TOKEN:-$(nssh "$CTRL" "grep '^TG_BOT_TOKEN=' /etc/db/secrets/telegram.env | cut -d= -f2- | tr -d '\"'")}"
 ok "секреты собраны (значения — только в файл, не в вывод)"
 
@@ -82,7 +87,7 @@ $K_CORE_KEY
   Пароль БД:   $RW_PASS
 
 --- 7. МАСКА TELEGRAM (mtproto.zig) ------------------------------------------
-  Ссылка: tg://proxy?server=tg.${DOMAIN:-<ваш-домен>}&port=443&secret=$MSEC
+  Ссылка FakeTLS: $MT_LINK
   (секрет один на кластер; клиенты ходят на любую ноду)
 
 --- 8. БЭКАПЫ (правило 3-2-1) -----------------------------------------------

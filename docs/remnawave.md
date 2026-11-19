@@ -114,6 +114,12 @@ volume `/etc/letsencrypt:/etc/letsencrypt:ro`, env: адрес панели + с
   хранит в `/etc/db/secrets/mtproto.env`, в чат/логи не попадает);
 - systemd `mtproto-proxy`; ссылка для Telegram: `tg://proxy?server=tg.321r.ru&port=443&secret=...`
   (ФАКТ 2026-11-16: `mtbuddy links` выдаёт именно server=tg.321r.ru, port=443);
+- **ВАЖНО (находка 38):** `secret` в ссылке — НЕ исходный 32-hex секрет из
+  `[access.users]`. FakeTLS-ссылка содержит `ee` + 32-hex секрет + hex-код домена
+  `tls_domain`. Брать готовую ссылку из `mtbuddy links`, либо из памятки владельца
+  (генератор `mtproto_link` в `install/lib.sh`). Сырой секрет давал «недоступен»:
+  конфигурация по умолчанию принимает FakeTLS, а не обычный MTProto-транспорт.
+  HTTP 200 страницы маски подтверждает только путь браузера, НЕ подключение Telegram.
 - **ufw: 8446 ТОЛЬКО от docker-подсети traefik!** mtbuddy при установке добавляет
   `8446/tcp ALLOW Anywhere` — это светит маску отдельным портом; правило убирать
   (`ufw delete allow 8446/tcp`), см. грабли/симптомы в V1/14;

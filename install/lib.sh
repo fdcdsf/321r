@@ -46,6 +46,16 @@ app_arbiter() { echo "$1" | grep -oE 'arbiter=[a-z0-9_-]+' | cut -d= -f2 || true
 app_row() { # $1=имя приложения
   local row; for row in "${APPS[@]}"; do [ "$(app_name "$row")" = "$1" ] && { echo "$row"; return; }; done
 }
+
+mtproto_link() { # $1=домен (tg.<base>) $2=секрет (32 hex) -> tg://-ссылка с FakeTLS
+  # Урок 38: ссылка со «сырым» секретом (без ee) = транспорт dd, который mtproto.zig
+  # по умолчанию не принимает (fake_tls_only) -> Telegram пишет «прокси недоступен».
+  # Нужен FakeTLS: ee + секрет + hex(домен) — точно так же печатает `mtbuddy links`.
+  [[ "$1" =~ ^[a-zA-Z0-9.-]+$ && "$2" =~ ^[a-fA-F0-9]{32}$ ]] || return 1
+  printf 'tg://proxy?server=%s&port=443&secret=ee%s%s' "$1" "$2" \
+    "$(printf '%s' "$1" | od -An -tx1 | tr -d ' \n')"
+}
+
 backup_window() { # $1=alias -> HH:MM (по умолчанию разнос по порядку: 03:10, 03:40, 04:10...)
   local w; w="$(grep -oE "(^| )$1=[0-9:]+" <<<"$BACKUP_WINDOWS" | awk -F= '{print $2}')"
   if [ -n "$w" ]; then echo "$w"; return; fi

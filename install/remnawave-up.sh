@@ -216,5 +216,5 @@ cat <<EOF
    5. subpage: токен (POST /api/tokens, scopes ['*']) → /opt/remnawave/subscription/.env
       REMNAWAVE_API_TOKEN → docker compose up -d;
    6. ресурсы Pangolin rem.$DOMAIN → 127.0.0.1:3000, sub.$DOMAIN → 127.0.0.1:3010 (HC 3011).
-  Ссылка маски Telegram: tg://proxy?server=tg.$DOMAIN&port=443&secret=$MSEC
+  Ссылка маски Telegram: $(mtproto_link "tg.$DOMAIN" "$MSEC")
 EOF
