@@ -28,6 +28,10 @@ if [ -s /etc/db/secrets/remnawave-admin.json ]; then
   RW_ADMIN="$(python3 -c 'import json; d=json.load(open("/etc/db/secrets/remnawave-admin.json")); print(d["username"] + " / " + d["password"])')"
 fi
 RW_PROBE="$(cat /etc/db/secrets/remnawave-probe-url 2>/dev/null || echo '(пока не настроена)')"
+ZBX_ADMIN="(Zabbix выключен)"
+if [ "${ZABBIX_MODE:-off}" = install ]; then
+  ZBX_ADMIN="$(nssh "$CONTROL" 'python3 -c '\''import json; d=json.load(open("/etc/db/secrets/zabbix-admin.json")); print(d["username"]+" / "+d["password"])'\''')"
+fi
 RW_PAGE="(домашняя страница подписки ещё не подключена)"
 if [ "${REMNAWAVE_MODE:-install}" = install ] && [ -s /etc/db/secrets/remnawave-probe-url ] && [ -n "${DOMAIN:-}" ]; then
   RW_PAGE="https://sub.$DOMAIN/${RW_PROBE##*/}"
@@ -143,6 +147,8 @@ $K_CORE_KEY
   /etc/db/cluster.yml       — манифест кластера (серверы/приложения)
   /opt/321r/install/inventory.conf — ваш инвентарь (мастер-сервер)
   /var/lib/backup-repos/    — репозитории бэкапов соседей
+  Zabbix (если включён): https://zabbix.${DOMAIN:-<ваш-домен>}, вход: $ZBX_ADMIN
+  Zabbix server HA: $CONTROL и резервный; web на каждой VPS, агенты по mesh.
 ================================================================================
 EOF
 chmod 600 "$OUT"

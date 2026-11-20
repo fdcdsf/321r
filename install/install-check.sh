@@ -173,6 +173,42 @@ if [ "${REMNAWAVE_MODE:-install}" = install ] && [ -n "${DOMAIN:-}" ]; then
   fi
 fi
 
+if [ "${ZABBIX_MODE:-off}" = install ]; then
+  echo "== 17. Zabbix HA: сервер, агенты, живые данные и UI =="
+  STANDBY_ZBX=""
+  for a in $(node_names); do [ "$a" = "$CONTROL" ] || STANDBY_ZBX="$a"; done
+  zbx_primary=0; zbx_standby=0
+  for a in $(node_names); do
+    role="$(nssh "$a" 'docker exec pg-zabbix psql -U postgres -tAc "SELECT pg_is_in_recovery()" 2>/dev/null' || true)"
+    [ "$role" != f ] || zbx_primary=$((zbx_primary + 1))
+    [ "$role" != t ] || zbx_standby=$((zbx_standby + 1))
+  done
+  [ "$zbx_primary" = 1 ] && [ "$zbx_standby" -ge 1 ] \
+    && ok_c "Zabbix PG: один primary, реплик $zbx_standby" \
+    || fail_c "Zabbix PG: primary=$zbx_primary, standby=$zbx_standby"
+  zbx_args=()
+  for a in $(node_names); do zbx_args+=(--node "$a"); done
+  if nssh "$CONTROL" "python3 /opt/zabbix/zabbix-check.py --control $CONTROL $(printf '%q ' "${zbx_args[@]}")"; then
+    ok_c "Zabbix: ровно один active, standby, метрики и алерты в Telegram готовы"
+  else
+    fail_c "Zabbix HA, сбор данных или алерты недоступны"
+  fi
+  for a in "$CONTROL" $STANDBY_ZBX; do
+    [ -n "$a" ] || continue
+    nssh "$a" '[ -x /opt/zabbix/tg-relay.sh ] && [ -r /etc/db/secrets/zabbix-telegram.env ]' \
+      && ok_c "$a: relay-скрипт и секрет алертов на месте" \
+      || fail_c "$a: нет tg-relay.sh или /etc/db/secrets/zabbix-telegram.env"
+  done
+  for a in $(node_names); do
+    st="$(nssh "$a" 'systemctl is-active zabbix-agent2' 2>/dev/null || true)"
+    [ "$st" = active ] && ok_c "$a: активный агент" || fail_c "$a: агент Zabbix не активен"
+    code="$(nssh "$a" "curl -sS -o /dev/null -w '%{http_code}' --max-time 12 \
+      --resolve zabbix.$DOMAIN:443:127.0.0.1 https://zabbix.$DOMAIN/index.php 2>/dev/null" || true)"
+    [ "$code" = 200 ] && ok_c "$a: Zabbix UI HTTPS 200 с доверенным TLS" \
+      || fail_c "$a: Zabbix UI недоступен (HTTP ${code:-нет})"
+  done
+fi
+
 echo
 echo "=========================================="
 echo "ИТОГ: ✓ $PASS  ! $WARN  ✗ $FAILN"

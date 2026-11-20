@@ -97,6 +97,15 @@ wizard() {
   fi
   read -rp "Ваш публичный ssh-ключ (пусто = оставить парольный вход): " USER_SSH_KEY
   read -rp "Профиль ресурсов S/M/L [L]: " x; PROFILE="${x:-L}"
+  read -rp "Установить Zabbix HA (панель + мониторинг на всех VPS; нужен хотя бы один сервер >=4 ГБ)? [y/N]: " x
+  case "${x:-n}" in
+    y|Y) ZABBIX_MODE=install
+         found=0
+         for row in "${apps[@]}"; do [ "${row%% *}" != zabbix ] || found=1; done
+         [ "$found" = 1 ] || apps+=("zabbix pg 5434 a,b,c") ;;
+    n|N) ZABBIX_MODE=off ;;
+    *) echo 'Ответьте y или n'; exit 1 ;;
+  esac
   {
     echo "# Сгенерировано мастером $(date -u +%F). Правьте — установщик перечитывает."
     echo "NODES=("
@@ -121,6 +130,7 @@ wizard() {
     done
     echo "USER_SSH_KEY=\"$USER_SSH_KEY\""
     echo "PROFILE=\"$PROFILE\""
+    echo "ZABBIX_MODE=\"$ZABBIX_MODE\""
     echo "BACKUP_WINDOWS=\"\""
     echo "SSH_KEY=\"\$HOME/.ssh/id_ed25519\""
   } > "$CONF"
@@ -272,6 +282,7 @@ step_komodo() {
   fi
 }
 step_remnawave(){ step "Remnawave, VPN-ноды и маскировка"; run_script remnawave-up.sh "Remnawave+маски"; }
+step_zabbix()   { [ "${ZABBIX_MODE:-off}" != install ] || run_script zabbix-up.sh "Zabbix HA"; }
 step_check()    { step "Автоприёмка";          bash "$HERE/install-check.sh"; }
 step_handover() { step "Памятка владельца";    bash "$HERE/handover.sh"; }
 step_harden()   { step "Финальная защита ssh"
@@ -304,7 +315,7 @@ if [ -n "$MANIFEST_ONLY" ]; then
   exit 0
 fi
 
-STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave check handover harden)
+STEPS=(preflight base mesh swarm db backup tgbot dns pangolin komodo remnawave zabbix check handover harden)
 for choice in "$FROM" "$TO"; do
   [ -z "$choice" ] && continue
   [[ " ${STEPS[*]} " == *" $choice "* ]] || fail "неизвестный шаг: $choice"
