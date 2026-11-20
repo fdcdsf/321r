@@ -2,9 +2,9 @@
 # Правится руками или через инвентарь; копия — на нодах в /etc/db/cluster.yml; секретов нет.
 cluster: 321r
 servers:
-  - {name: a, ip: 178.236.242.213, geo: -, provider: -, size: l, role: state}
-  - {name: b, ip: 48.102.162.135, geo: -, provider: -, size: l, role: work}
-  - {name: c, ip: 194.48.141.214, geo: -, provider: -, size: l, role: bulk}
+  - {name: a, ip: 45.12.237.234, geo: -, provider: -, size: l, role: state}
+  - {name: b, ip: 45.147.176.79, geo: -, provider: -, size: l, role: work}
+  - {name: c, ip: 62.113.96.7, geo: -, provider: -, size: l, role: bulk}
 control: b   # «говорящая» нода бота (команды); алерты шлёт ЛЮБАЯ нода
 apps:
   - {name: pangolin, engine: pg, replicas: 3, rule: "321"}
