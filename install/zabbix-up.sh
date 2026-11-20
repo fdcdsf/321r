@@ -114,6 +114,27 @@ done
 step "Активные агенты на всех VPS (b;c = один HA-кластер)"
 bash "$HERE/zabbix-agent-up.sh" "$CONTROL_NODE" "$STANDBY"
 
+step "HTTP-доступность приложений (список URL на каждую ноду)"
+probe=""
+if [ -s /etc/db/secrets/remnawave-probe-url ]; then
+  probe="$(cat /etc/db/secrets/remnawave-probe-url)"
+  case "$probe" in https://*) ;; *) probe="" ;; esac
+fi
+for a in $(node_names); do
+  {
+    echo "vpn|https://vpn-$a.$DOMAIN/"
+    if [ "$a" = "$CONTROL_NODE" ]; then
+      echo "komodo|https://komodo.$DOMAIN/"
+      echo "pangolin|https://pangolin.$DOMAIN/"
+      echo "zabbix|https://zabbix.$DOMAIN/index.php"
+      echo "rem|https://rem.$DOMAIN/"
+      # «Красивая» страница подписки — именно её открывает пользователь.
+      if [ -n "$probe" ]; then echo "sub|https://sub.$DOMAIN/$(basename "$probe")"; fi
+    fi
+  } | nssh "$a" 'umask 077; cat > /etc/db/secrets/http-checks.txt; chmod 600 /etc/db/secrets/http-checks.txt'
+  ok "$a: список HTTP-проверок записан"
+done
+
 step "Панель Zabbix через локальный frontend на КАЖДОЙ ноде"
 if [ -s /etc/db/secrets/pangolin-admin.json ]; then
   specs=()

@@ -8,6 +8,7 @@ import socket
 import subprocess
 import tempfile
 import time
+from urllib.parse import urlparse
 
 
 OUT = Path('/var/lib/zabbix-321r/snapshot.json')
@@ -18,6 +19,37 @@ def run(*args):
         return subprocess.run(args, capture_output=True, text=True, timeout=12, check=True).stdout
     except (subprocess.SubprocessError, OSError):
         return ''
+
+
+def run_rc(*args):
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=12).returncode
+    except (subprocess.SubprocessError, OSError):
+        return 1
+
+
+def host_alias():
+    return socket.gethostname().split('.')[0]
+
+
+def control_alias():
+    """Alias control-ноды из /etc/db/cluster.yml (пусто — если не разобрали)."""
+    try:
+        for line in Path('/etc/db/cluster.yml').read_text(encoding='utf-8', errors='replace').splitlines():
+            m = re.match(r'^\s*control:\s*([A-Za-z][A-Za-z0-9_-]*)', line)
+            if m:
+                return m.group(1).strip()
+    except OSError:
+        pass
+    return ''
+
+
+def is_control():
+    """Кластерные факты (VIP, swarm, HA) пишем ТОЛЬКО с control-ноды: иначе одна
+    авария дала бы три одинаковых алерта (по числу VPS). Если control не разобрали —
+    пишем факты везде: лучше дубль, чем слепая зона."""
+    control = control_alias()
+    return host_alias() == control if control else True
 
 
 def zabbix_ha():
@@ -47,12 +79,16 @@ def zabbix_ha():
 
 def collect():
     services = {}
+    # ha держим ВНЕ services: LLD завёл бы на них неверные триггеры (=0),
+    # а HA-контроль — это «ровно один active», и делают его отдельные элементы.
+    ha = {}
     for line in run('docker', 'ps', '-a', '--format', '{{.Names}}|{{.State}}|{{.Status}}').splitlines():
         parts = line.split('|', 2)
         if len(parts) == 3:
             name, state, health = parts
             # Swarm оставляет завершённые task-контейнеры с новыми именами.
             # Это НЕ сервисы, иначе каждый rolling update вызывает ложный алерт.
+            # Сами сервисы Swarm проверяются отдельно — см. ниже.
             if re.search(r'\.\d+\.[a-z0-9]{8,}$', name):
                 continue
             if name and len(name) < 128:
@@ -66,25 +102,79 @@ def collect():
             services['systemd/' + name] = int(run('systemctl', 'is-active', name).strip() == 'active')
     for path in Path('/etc/db/apps.d').glob('*.yaml'):
         name = path.stem
-        if name.isalnum() and len(name) < 80:
-            services['app-db/' + name] = services.get('docker/pg-' + name,
-                services.get('docker/mongod-' + name, 0))
-        match = re.search(r'^port:\s*(\d+)\s*$', path.read_text(), re.M)
-        if match:
-            try:
-                with socket.create_connection(('10.66.0.99', int(match.group(1))), timeout=2):
-                    services['vip/' + name] = 1
-            except OSError:
-                services['vip/' + name] = 0
+        if not (name.isalnum() and len(name) < 80):
+            continue
+        text = path.read_text(encoding='utf-8', errors='replace')
+        # Приложение = контейнер БД + БД реально отвечает, а не просто «running».
+        container = 'pg-' + name if services.get('docker/pg-' + name) else 'mongod-' + name
+        up = services.get('docker/' + container, 0)
+        if up:
+            if container.startswith('pg-'):
+                up = int(run_rc('docker', 'exec', container, 'pg_isready', '-q') == 0)
+            else:
+                out = run('docker', 'exec', container, 'mongosh', '--quiet',
+                          '--eval', 'print(db.runCommand({ping:1}).ok)')
+                up = int(bool(re.search(r'(^|\s)1(\s|$)', out)))
+        services['app-db/' + name] = up
+        if is_control():
+            match = re.search(r'^port:\s*(\d+)\s*$', text, re.M)
+            if match:
+                try:
+                    with socket.create_connection(('10.66.0.99', int(match.group(1))), timeout=2):
+                        services['vip/' + name] = 1
+                except OSError:
+                    services['vip/' + name] = 0
     stamp = Path('/var/lib/pgbackup/last_ok')
     # Бэкапы запускаются по ночам; до первого полного окна на новой ноде это
     # честный 0, а не «всё нормально». Допуск 36 часов (разнос окон + задержки).
     services['backup/fresh'] = int(stamp.is_file() and time.time() - stamp.stat().st_mtime < 36 * 3600)
-    # HA Zabbix: 3 = active, 0 = standby. -1 = БД/кластер недоступен (тоже тревога).
-    ha = zabbix_ha()
-    services['zabbix/ha-active'] = ha.get(3, 0) if ha is not None else -1
-    services['zabbix/ha-standby'] = ha.get(0, 0) if ha is not None else -1
-    return {'services': services}
+
+    # HTTP-доступность приложений через ЛОКАЛЬНЫЙ роутер traefik (127.0.0.1):
+    # так не зависит от DNS и от того, к какому exit node подключился Newt.
+    # Список пишет установщик; он свой на каждой ноде — свои маски проверяются
+    # везде, а общие приложения кладутся только в файл control-ноды.
+    checks = Path('/etc/db/secrets/http-checks.txt')
+    if checks.is_file():
+        for line in checks.read_text(encoding='utf-8', errors='replace').splitlines():
+            line = line.strip()
+            if not line or line.startswith('#') or '|' not in line:
+                continue
+            name, url = (p.strip() for p in line.split('|', 1))
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}', name) or not url.startswith('https://'):
+                continue
+            host = urlparse(url).hostname
+            if not host:
+                continue
+            rc = run_rc('curl', '-sS', '-o', '/dev/null', '--fail', '--max-time', '12',
+                        '--resolve', host + ':443:127.0.0.1', url)
+            services['http/' + name] = int(rc == 0)
+
+    if is_control():
+        # Swarm: task-контейнеры отфильтрованы выше, поэтому мёртвый сервис
+        # остаётся БЕЗ единого контейнера — проверяем сами сервисы и узлы.
+        for line in run('docker', 'service', 'ls', '--format', '{{.Name}}|{{.Replicas}}').splitlines():
+            if '|' not in line:
+                continue
+            name, rep = line.split('|', 1)
+            name, rep = name.strip(), rep.strip()
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', name):
+                continue
+            cur, _, want = rep.partition('/')
+            ok = int(cur.isdigit() and want.isdigit() and want != '0' and cur == want)
+            services['swarm/' + name] = ok
+        for line in run('docker', 'node', 'ls', '--format', '{{.Hostname}}|{{.Status}}|{{.Availability}}').splitlines():
+            parts = line.split('|')
+            if len(parts) != 3:
+                continue
+            node, status, avail = (p.strip() for p in parts)
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', node):
+                continue
+            services['swarm-node/' + node] = int(status == 'Ready' and avail == 'Active')
+        # HA Zabbix: 3 = active, 0 = standby. -1 = БД/кластер недоступен (тоже тревога).
+        counts = zabbix_ha()
+        ha['active'] = counts.get(3, 0) if counts is not None else -1
+        ha['standby'] = counts.get(0, 0) if counts is not None else -1
+    return {'services': services, 'ha': ha}
 
 
 def main():

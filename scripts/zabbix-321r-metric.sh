@@ -8,11 +8,11 @@ case "${1:-}" in
     jq -c '{data:[.services|keys[]|{"{#SERVICE}":.}]}' "$file" ;;
   status)
     name="${2:-}"
-    [[ "$name" =~ ^(docker|systemd|app-db|vip|backup)/[a-zA-Z0-9_.-]+$ ]] || exit 1
+    [[ "$name" =~ ^(docker|systemd|app-db|vip|backup|swarm-node|swarm|http)/[a-zA-Z0-9_.-]+$ ]] || exit 1
     jq -er --arg name "$name" '.services[$name] // empty' "$file" ;;
   ha-active)
-    jq -er '.services["zabbix/ha-active"] // empty' "$file" ;;
+    jq -er '.ha.active' "$file" ;;
   ha-standby)
-    jq -er '.services["zabbix/ha-standby"] // empty' "$file" ;;
+    jq -er '.ha.standby' "$file" ;;
   *) exit 2 ;;
 esac

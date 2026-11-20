@@ -51,11 +51,24 @@ def check(api, nodes, control):
         if not uptime or now - int(uptime[0].get('lastclock') or 0) > 900:
             raise provision.Failure(f'{alias}: нет свежей Linux-метрики uptime')
         items = api.call('item.get', {'hostids': [hostid], 'search': {'key_': 'cluster.service.status['},
-                                      'output': ['lastclock'], 'limit': 500})
+                                      'output': ['key_', 'lastclock'], 'limit': 500})
         recent = sum(1 for x in items if now - int(x.get('lastclock') or 0) < 900)
         if recent < 3:
             raise provision.Failure(f'{alias}: активное обнаружение сервисов не собирает данные')
-        print(f'{alias}: uptime и {recent} статусов сервисов поступают в Zabbix')
+        kinds = {k['key_'].split('[', 1)[1].split('/', 1)[0] for k in items if '[' in k['key_']}
+        if 'http' not in kinds:
+            raise provision.Failure(f'{alias}: нет HTTP-проверок (своя VPN-маска)')
+        print(f'{alias}: uptime, {recent} статусов сервисов и HTTP-проверка')
+
+    # Кластерные проверки живут только на control — иначе алерты дублируются.
+    citems = api.call('item.get', {'hostids': [hid], 'search': {'key_': 'cluster.service.status['},
+                                   'output': ['key_'], 'limit': 500})
+    ckinds = {i['key_'].split('[', 1)[1].split('/', 1)[0] for i in citems if '[' in i['key_']}
+    for need, what in (('swarm', 'swarm-сервисы'), ('swarm-node', 'узлы swarm'),
+                       ('vip', 'VIP приложений'), ('http', 'HTTP приложений')):
+        if need not in ckinds:
+            raise provision.Failure(f'{control}: нет кластерной проверки {what} ({need}/)')
+    print(f'{control}: swarm, узлы swarm, VIP и HTTP приложений на наблюдении')
 
     # Алерты: медиатип-скрипт, служебный пользователь и действие должны быть готовы.
     mt = api.call('mediatype.get', {'filter': {'name': ['321r Telegram']},
