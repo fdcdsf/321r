@@ -142,11 +142,14 @@ gen_mongo_compose() { # $1 = alias узла
   local b rs="" mem="640m"
   if [ "$CLASS" = local ]; then b=10.66.0.99; else b="$(map_ip "$1")"; fi
   [ "$CLASS" = cluster ] && rs=",\"--replSet\",\"rs_${APP}\""
-  # Арбитру — лимит 400m (данных не хранит). КЭШ НЕ УЖИМАТЬ: mongo не принимает
-  # wiredTigerCacheSizeGB < 0.25 (BadValue при старте, проверено 2026-11-16).
-  # Лимиты 640m/400m (урок 2026-11-17): mongosh проверок внутри контейнера ест ~200 МБ
-  # пиком — при 512m/300m cgroup-OOM убивал mongosh и проверки падали.
-  if [ -n "$ARB" ] && [ "$1" = "$ARB" ]; then mem="400m"; fi
+  # Лимит 640m и арбитру тоже (урок 2026-11-21). КЭШ НЕ УЖИМАТЬ: mongo не принимает
+  # wiredTigerCacheSizeGB < 0.25 (BadValue при старте, проверено 2026-11-16), поэтому
+  # даже арбитр без данных держит ~380 МБ в установившемся режиме (кэш 256 МБ + overhead).
+  # А `docker exec mongosh` живёт ВНУТРИ cgroup контейнера и даёт пик ~200 МБ:
+  # при 400m у арбитра 383+200 > 400 → cgroup-OOM убивал mongosh и mongod,
+  # db-guard и мониторинг флапали каждые пару минут (dmesg: task=mongosh).
+  # Правило: лимит = установившееся потребление + ~250 МБ на проверку.
+  if [ -n "$ARB" ] && [ "$1" = "$ARB" ]; then mem="640m"; fi
   cat <<EOF
 services:
   db:

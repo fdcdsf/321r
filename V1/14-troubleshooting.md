@@ -231,12 +231,16 @@ wg show | grep -E 'peer|latest handshake'
 - **Симптом: `mongod` входит в crash-loop, в логе «Error during global initialization …
   BadValue … cacheSizeGB».** Причина: **MongoDB не принимает `wiredTigerCacheSizeGB` меньше
   0.25** — попытка ужать кэш арбитра до 0.1 кладёт контейнер. Лечение: вернуть 0.256;
-  экономить на mongo можно только `mem_limit` (арбитру — 400m, дата-нодам — 640m:
-  usage ~126 МБ + mongosh проверок ~200 МБ пиком, см. ниже).
+  экономить на mongo можно только `mem_limit`, и не ниже 640m даже арбитру
 - **Симптом: cgroup-OOM убивает mongosh внутри mongo-контейнера** (dmesg: «Memory cgroup
   out of memory: Killed process (mongosh)»). Причина: проверки db-guard запускают mongosh
   ВНУТРИ контейнера mongod, пик mongosh ~200 МБ — лимиты 300/512m его не вмещали.
   Лечение (2026-11-17): mongo-лимиты 400m (арбитр) / 640m (дата-ноды), вшито в db-add.
+   **Недостаточно для арбитра (2026-11-21):** он держал ~383 МБ (кэш 256 +
+   overhead, а не ~126 МБ, как было записано выше), и 383+200 > 400m — OOM
+   повторился. Лечение: **всем mongo 640m**. Плюс из снимка мониторинга убраны
+   `docker exec mongosh/pg_isready` (готовность БД — зона db-guard, дублировать
+   нельзя), `app-db/*` удалён как чистый дубль `docker/*`.
 - **Симптом: стендбай часами спамит «requested starting point … is not in this server's
   history»** (разошёлся timeline после фейловеров; повтор 2026-11-17). Лечение — штатное
   `pg-rebuild-standby.sh`. **Важно:** скрипты после правок раскатывать на ВСЕ ноды

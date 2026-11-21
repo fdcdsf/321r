@@ -11,7 +11,7 @@ Telegram-боту и db-guard. Профиль S не включает его: с
 |---|---|---|
 | Контейнеры Docker | `docker/*` | на каждой VPS (сверено с `docker ps` 1:1) |
 | systemd-юниты | `systemd/*` | на каждой VPS (только enabled) |
-| Базы данных | `app-db/*` | контейнер БД **+ `pg_isready`/`mongosh ping`**, т.е. БД реально отвечает |
+| Базы данных | `docker/pg-*`, `docker/mongod-*`, `vip/*` | контейнер БД + VIP:порт отвечает. **Готовность/репликация/кворум — это db-guard** (каждые 10 с, свои алерты): в Zabbix не дублируем |
 | VIP приложений | `vip/*` | только control (TCP к VIP:порт) |
 | Swarm-сервисы | `swarm/*` | только control (`docker service ls`: реплики X/Y) |
 | Swarm-узлы | `swarm-node/*` | только control (Ready + Active) |

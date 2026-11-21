@@ -104,19 +104,14 @@ def collect():
         name = path.stem
         if not (name.isalnum() and len(name) < 80):
             continue
-        text = path.read_text(encoding='utf-8', errors='replace')
-        # Приложение = контейнер БД + БД реально отвечает, а не просто «running».
-        container = 'pg-' + name if services.get('docker/pg-' + name) else 'mongod-' + name
-        up = services.get('docker/' + container, 0)
-        if up:
-            if container.startswith('pg-'):
-                up = int(run_rc('docker', 'exec', container, 'pg_isready', '-q') == 0)
-            else:
-                out = run('docker', 'exec', container, 'mongosh', '--quiet',
-                          '--eval', 'print(db.runCommand({ping:1}).ok)')
-                up = int(bool(re.search(r'(^|\s)1(\s|$)', out)))
-        services['app-db/' + name] = up
+        # Здоровье БД (готовность, репликация, кворум) — это db-guard каждые 10 с,
+        # у него уже есть свои алерты: здесь НЕ дублируем. И НЕ зовём mongosh/
+        # pg_isready ради готовности — `docker exec` живёт ВНУТРИ cgroup контейнера
+        # и подбрасывает пик ~200 МБ, из-за чего арбитр mongo уходил в cgroup-OOM
+        # (dmesg: task=mongosh) и всё флапало. Контейнеры БД и так видны как
+        # docker/pg-* и docker/mongod-*.
         if is_control():
+            text = path.read_text(encoding='utf-8', errors='replace')
             match = re.search(r'^port:\s*(\d+)\s*$', text, re.M)
             if match:
                 try:
