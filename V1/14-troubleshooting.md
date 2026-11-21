@@ -241,6 +241,13 @@ wg show | grep -E 'peer|latest handshake'
    повторился. Лечение: **всем mongo 640m**. Плюс из снимка мониторинга убраны
    `docker exec mongosh/pg_isready` (готовность БД — зона db-guard, дублировать
    нельзя), `app-db/*` удалён как чистый дубль `docker/*`.
+- **Симптом: в `postgresql.auto.conf` копятся дубли `primary_conninfo`**
+   (у одного стендбая было 4 строки с разными host). Причина: `pg-rebuild-standby.sh`,
+   `db-add.sh` и `db-guard.sh` делали `echo ... >> postgresql.auto.conf`, не удаляя
+   старое. PostgreSQL берёт **последнюю** строку, поэтому работало, но мусор
+   кочевал через `pg_basebackup` на первичный и обратно на новые стендбаи.
+   Лечение (2026-11-21): во всех трёх скриптах перед записью
+   `sed -i '/^primary_conninfo =/d'`, накопленные строки вычищены + `pg_reload_conf()`.
 - **Симптом: стендбай часами спамит «requested starting point … is not in this server's
   history»** (разошёлся timeline после фейловеров; повтор 2026-11-17). Лечение — штатное
   `pg-rebuild-standby.sh`. **Важно:** скрипты после правок раскатывать на ВСЕ ноды

@@ -130,6 +130,7 @@ else
   docker run --rm -u postgres -e PGPASSWORD="$REPL_PASSWORD" -v "$DIR":/data postgres:17-alpine \
     pg_basebackup -h @PRIMARY_IP@ -p @PORT@ -U replicator -D /data -R -X stream
   # свой primary_conninfo (с паролем) поверх строки от -R
+  sed -i '/^primary_conninfo =/d' "$DIR/postgresql.auto.conf" 2>/dev/null || true
   echo "primary_conninfo = 'host=@PRIMARY_IP@ port=@PORT@ user=replicator password=${REPL_PASSWORD}'" \
     >> "$DIR/postgresql.auto.conf"
   echo "basebackup готов, primary_conninfo записан"
@@ -173,7 +174,9 @@ services:
     container_name: db-proxy
     restart: unless-stopped
     network_mode: host
-    mem_limit: 64m
+    # 128m (урок 2026-11-21): haproxy держал ~42 МБ, а 64m не вмещало пик
+    # соединений — cgroup-OOM убивал haproxy (dmesg: task=haproxy), рестарты 2–4.
+    mem_limit: 128m
     volumes:
       - /opt/db/proxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
 EOF

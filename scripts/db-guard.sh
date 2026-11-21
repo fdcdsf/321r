@@ -333,6 +333,8 @@ pg_become_standby() { # $1=app $2=ip первичного: переписать 
   [ -d "$dir" ] || return 1
   [ -f "/etc/db/secrets/$app.env" ] || { log "$app: нет файла секретов"; return 1; }
   . "/etc/db/secrets/$app.env"
+  # убрать старые строки: при повторных переключениях копились дубли (урок 2026-11-21)
+  sed -i '/^primary_conninfo =/d' "$dir/postgresql.auto.conf" 2>/dev/null || true
   echo "primary_conninfo = 'host=$dip port=$PORT user=replicator password=${REPL_PASSWORD}'" >> "$dir/postgresql.auto.conf"
   rm -f "$dir/promote.signal"    # иначе при рестарте сигнал промоушена перебьёт standby
   touch "$dir/standby.signal"
