@@ -140,8 +140,14 @@ def collect():
             host = urlparse(url).hostname
             if not host:
                 continue
-            rc = run_rc('curl', '-sS', '-o', '/dev/null', '--fail', '--max-time', '12',
-                        '--resolve', host + ':443:127.0.0.1', url)
+            # Одна неудача — ещё не поломка: TLS-хендшейк через traefik к живому
+            # бэкенду иногда проседает и даёт минутный флап (урок 2026-11-22).
+            args = ('curl', '-sS', '-o', '/dev/null', '--fail', '--max-time', '12',
+                    '--resolve', host + ':443:127.0.0.1', url)
+            rc = run_rc(*args)
+            if rc != 0:
+                time.sleep(3)
+                rc = run_rc(*args)
             services['http/' + name] = int(rc == 0)
 
     if is_control():

@@ -33,12 +33,12 @@ for d in /var/lib/dbdata/pg-*; do
   app="${d##*/pg-}"; [ -d "$d" ] || continue
   port="$(sed -n 's/^port: *//p' "/etc/db/apps.d/$app.yaml" 2>/dev/null | sed 's/#.*//; s/ *$//')"
   ok=""
+  err=""
   for try in 1 2; do
-    if docker exec -u postgres "pg-$app" sh -c \
-        "PGPASSWORD=\$REPL_PASSWORD pg_basebackup -h 10.66.0.99 -p ${port:-5432} -U replicator -D /var/lib/pgwal/bb-$STAMP -Ft -Xs -z" >/dev/null 2>&1; then
-      ok=1; break
-    fi
-    log "pg-$app: попытка $try basebackup не удалась, повтор через 15 с"
+    # ошибку НЕ глотаем: без неё «basebackup не удалась» необъяснима (урок 2026-11-22)
+    err="$(docker exec -u postgres "pg-$app" sh -c \
+        "PGPASSWORD=\$REPL_PASSWORD pg_basebackup -h 10.66.0.99 -p ${port:-5432} -U replicator -D /var/lib/pgwal/bb-$STAMP -Ft -Xs -z" 2>&1 >/dev/null)" && { ok=1; break; }
+    log "pg-$app: попытка $try basebackup не удалась: $(printf '%s' "$err" | tail -2 | tr '\n' ' ' | sed -E 's/password=[^ ]*/password=***/g')"
     sleep 15
   done
   if [ -n "$ok" ]; then
