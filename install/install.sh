@@ -333,6 +333,15 @@ step_pangolin() {
     python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}"
     bash "$HERE/pangolin-agents.sh"
     python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}" --status
+    # Newt мог стартовать раньше готовности Pangolin и остаться офлайн: процесс
+    # жив (websocket поднят), но туннель не установлен и сам он не восстанавливается
+    # (урок 2026-11-23). Переподнимаем агентов и перепроверяем.
+    for a in $(node_names); do
+      nssh "$a" 'systemctl restart 321r-newt.service >/dev/null 2>&1 || true' &
+    done
+    wait
+    sleep 20
+    python3 "$ROOT/scripts/pangolin-sites.py" "${sites[@]}" --status
     if [ "${REMNAWAVE_MODE:-install}" = connect ]; then
       python3 "$ROOT/scripts/pangolin-sites.py" --url "https://pangolin.$DOMAIN" \
         --org-id cluster --node home
