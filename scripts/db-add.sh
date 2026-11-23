@@ -87,11 +87,21 @@ gen_init_app() { # роли/база + pg_hba для mesh; читает ЛОКА
 set -euo pipefail
 . /etc/db/secrets/@APP@.env
 q() { docker exec -u postgres pg-@APP@ psql -U postgres -tAc "$1"; }
+# Не `cmd && break` под set -e — так непонятно, что именно не так (урок
+# 2026-11-23: здоровый PG считался «не поднявшимся за 180 с»). Явный флаг +
+# диагностика при провале.
+ok=""
 for _ in $(seq 1 180); do
-  q "SELECT 1" >/dev/null 2>&1 && break
+  if q "SELECT 1" >/dev/null 2>&1; then ok=1; break; fi
   sleep 1
 done
-q "SELECT 1" >/dev/null 2>&1 || { echo "PG не поднялся за 180 с" >&2; exit 1; }
+if [ -z "$ok" ]; then
+  echo "PG не поднялся за 180 с" >&2
+  docker ps -a --filter "name=pg-@APP@" --format '  {{.Names}} {{.State}} {{.Status}}' >&2 || true
+  echo "  --- последние строки лога ---" >&2
+  docker logs --tail 20 "pg-@APP@" >&2 || true
+  exit 1
+fi
 q "SELECT 1 FROM pg_roles WHERE rolname='replicator'" | grep -q '^1$' || \
   q "CREATE ROLE replicator WITH REPLICATION LOGIN PASSWORD '${REPL_PASSWORD}'"
 q "SELECT 1 FROM pg_roles WHERE rolname='@APP@'" | grep -q '^1$' || \
