@@ -333,6 +333,23 @@ elif [ "$ENGINE" = mongo ]; then
     run_on "$n" "cd /opt/db/mongo-${APP} && docker compose up -d"
   done
 
+  # Дождаться, пока ВСЕ mongod начнут слушать (урок 2026-11-23: rs.initiate
+  # сразу после up -d падал с «Connection refused» на арбитре, и весь шаг
+  # komodo умирал).
+  for n in "${START_NODES[@]}"; do
+    okk=""
+    for i in $(seq 1 60); do
+      if run_on "$n" "ss -ltn | grep -q ':${PORT} '" >/dev/null 2>&1; then okk=1; break; fi
+      sleep 5
+    done
+    if [ -n "$okk" ]; then
+      echo "  $n: mongod слушает :$PORT"
+    else
+      echo "  $n: ОШИБКА — mongod не начал слушать :$PORT за 5 минут" >&2
+      exit 1
+    fi
+  done
+
   if [ "$CLASS" = cluster ]; then
     # rs.initiate: priority 1 — только у стартового первичного, остальные 0, арбитр — arbiterOnly
     CFG="{_id:\"rs_${APP}\",members:["
@@ -352,8 +369,17 @@ elif [ "$ENGINE" = mongo ]; then
 set -euo pipefail
 st=$(docker exec mongod-@APP@ mongosh --quiet --eval 'try { print(rs.status().myState) } catch (e) { print(-1) }')
 if [ "$st" = "-1" ]; then
-  docker exec mongod-@APP@ mongosh --quiet --eval 'rs.initiate(@CFG@)'
-  echo "rs.initiate отправлен"
+  # rs.initiate требует, чтобы ВСЕ члены ответили; если кто-то ещё поднимается —
+  # повторяем (урок 2026-11-23).
+  ok=""
+  for i in $(seq 1 12); do
+    if docker exec mongod-@APP@ mongosh --quiet --eval 'rs.initiate(@CFG@)' 2>/dev/null; then
+      ok=1; break
+    fi
+    echo "  rs.initiate попытка $i не удалась, жду 10 с"
+    sleep 10
+  done
+  if [ -n "$ok" ]; then echo "rs.initiate отправлен"; else echo "rs.initiate НЕ УДАЛСЯ" >&2; exit 1; fi
 else
   echo "rs уже инициализирован (myState=$st)"
 fi
