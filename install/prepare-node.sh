@@ -35,8 +35,22 @@ for i in $(seq 1 60); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; slee
 apt_retry() { local n; for n in $(seq 1 10); do "$@" && return 0; echo "  apt занят — жду 15 с (попытка $n)"; sleep 15; done; return 1; }
 APTQ="apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10"
 apt_retry $APTQ update -qq
-apt_retry $APTQ install -y -qq ca-certificates curl gnupg git jq python3 ufw fail2ban \
-  dkms "linux-headers-$(uname -r)" tar gzip util-linux restic >/dev/null
+# Пакеты ядра — ОТДЕЛЬНО от основного списка (урок 2026-11-23): если заголовков
+# для ЗАПУЩЕННОГО ядра нет в репо (Debian вычищает старые версии), одна
+# недоступная позиция не должна отменять установку curl/docker и всего остального.
+apt_retry $APTQ install -y -qq ca-certificates curl gnupg git jq python3 ufw \
+  dkms tar gzip util-linux restic >/dev/null
+if apt_retry $APTQ install -y -qq "linux-headers-$(uname -r)" >/dev/null 2>&1; then
+  echo "  заголовки ядра $(uname -r) — установлены"
+elif apt_retry $APTQ install -y -qq linux-image-amd64 linux-headers-amd64 >/dev/null 2>&1; then
+  touch /etc/321r-reboot-required
+  echo "  ВНИМАНИЕ: заголовков для $(uname -r) в репозитории нет (старое ядро вычищено)."
+  echo "  Поставлены linux-image-amd64 + linux-headers-amd64. НУЖЕН РЕБУТ: без него DKMS"
+  echo "  не соберёт модуль AmneziaWG (модуль ядра требует заголовки именно работающего ядра)."
+else
+  echo "  ОШИБКА: не удалось поставить заголовки ядра — AmneziaWG не соберётся" >&2
+  exit 1
+fi
 if ! command -v docker >/dev/null 2>&1; then
   install -m 0755 -d /etc/apt/keyrings
   rm -f /etc/apt/keyrings/docker.gpg   # иначе gpg спросит «перезаписать?» через /dev/tty
@@ -128,14 +142,21 @@ ufw default allow outgoing >/dev/null
 ufw --force enable >/dev/null
 
 # --- 7) fail2ban ---
+# ВАЖНО (урок 2026-11-23): сам `apt install fail2ban` поднимает ДЕФОЛТНЫЙ jail sshd
+# и успевает ЗАБАНИТЬ админа, который ведёт установку — сессия падает с
+# «Connection closed by remote host», а в fail2ban: Banned IP list: <админ>.
+# Поэтому конфиг с ignoreip кладём ДО установки, и лишь потом ставим и включаем.
+install -d -m 755 /etc/fail2ban/jail.d
+CLIENT_IP="$(echo "${SSH_CLIENT:-}" | awk '{print $1}')"
 cat > /etc/fail2ban/jail.d/321r.conf <<EOF
 [sshd]
 enabled = true
-port = 2222
-maxretry = 3
+port = 22,2222
+maxretry = 5
 bantime = 1h
-ignoreip = 127.0.0.1/8 10.66.0.0/24
+ignoreip = 127.0.0.1/8 10.66.0.0/24 ${CLIENT_IP}
 EOF
+apt_retry $APTQ install -y -qq fail2ban >/dev/null
 systemctl enable --now fail2ban >/dev/null
 
 # --- 8) каталоги кластера (урок: umask 077 на секреты) ---

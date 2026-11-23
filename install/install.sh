@@ -206,6 +206,28 @@ step_base() {
   done
   for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
   [ "$bad" = 0 ] || fail "базовая подготовка не на всех нодах — смотрите вывод выше"
+  # Ядро могло устареть так, что заголовков для него в репо уже нет (Debian чистит
+  # старые версии). Тогда prepare-node ставит свежее ядро и просит ребут — без
+  # него DKMS не соберёт модуль AmneziaWG. Перезагружаем и ждём ноду обратно.
+  local ra=()
+  for a in $(node_names); do
+    nssh "$a" 'test -f /etc/321r-reboot-required' 2>/dev/null && ra+=("$a")
+  done
+  if [ "${#ra[@]}" -gt 0 ]; then
+    step "Перезагрузка нод со сменой ядра (${ra[*]})"
+    for a in "${ra[@]}"; do
+      nssh "$a" 'rm -f /etc/321r-reboot-required; nohup sh -c "sleep 1; systemctl reboot" >/dev/null 2>&1 &' || true
+    done
+    for a in "${ra[@]}"; do
+      local up=""
+      for i in $(seq 1 60); do
+        if nssh "$a" 'uname -r' >/dev/null 2>&1; then up=1; break; fi
+        sleep 10
+      done
+      [ -n "$up" ] || fail "$a: не вернулась после перезагрузки"
+      ok "$a: снова в строю, ядро $(nssh "$a" 'uname -r')"
+    done
+  fi
   detect_all_ports   # теперь все ноды отвечают на 2222
   render_manifest
   ok "базовая подготовка завершена на всех нодах"

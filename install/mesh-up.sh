@@ -20,18 +20,33 @@ for a in $(node_names); do
       rm -f /etc/apt/keyrings/amnezia.gpg   # иначе gpg спросит «перезаписать?» через /dev/tty
       curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x75C9DD72C799870E310542E24166F2C257290828" \
         | gpg --dearmor -o /etc/apt/keyrings/amnezia.gpg
-      echo "deb [signed-by=/etc/apt/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" \
+      # PPA Amnezia публикует только серии Ubuntu, а ноды могут быть Debian.
+      # Пробуем СВОЮ серию, при её отсутствии — известные рабочие (проверено на
+      # Debian 13: пакеты из focal ставятся, это DKMS + утилиты).
+      . /etc/os-release
+      suite=focal
+      for s in "$VERSION_CODENAME" noble jammy focal; do
+        [ -n "$s" ] || continue
+        if curl -fsS -o /dev/null --max-time 15 \
+             "https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu/dists/$s/Release" 2>/dev/null; then
+          suite="$s"; break
+        fi
+      done
+      echo "deb [signed-by=/etc/apt/keyrings/amnezia.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu $suite main" \
         > /etc/apt/sources.list.d/amnezia.list
       export DEBIAN_FRONTEND=noninteractive
       apt_retry $APTQ update -qq
       apt_retry $APTQ install -y -qq amneziawg >/dev/null
-      modprobe amneziawg'
+      # Модуль ядра обязан загрузиться: apt может «успешно» поставить пакет, а DKMS
+      # молча пропустить сборку без заголовков (урок 2026-11-23) — тогда меша нет.
+      modprobe amneziawg 2>/dev/null \
+        || { echo "  modprobe не прошёл — пробую пересборку DKMS"; dkms autoinstall >/dev/null 2>&1 || true; modprobe amneziawg; }'
     echo "AmneziaWG установлен"
   ) 2>&1 | sed "s/^/[$a] /" &
   pids+=($!)
 done
 for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
-[ "$bad" = 0 ] || fail "AmneziaWG встал не на всех нодах — смотрите вывод выше (урок: ядро ≥6.7, полная VM)"
+[ "$bad" = 0 ] || fail "AmneziaWG встал не на всех нодах — смотрите вывод выше. Частые причины: контейнерная виртуализация (нужна полная VM), нет заголовков ядра для работающего ядра (шаг base ставит их и при необходимости просит ребут), ядро старше 6.7."
 
 # 2) общий секрет обфускации (HPK) — один на весь кластер (урок: разные = линк молчит).
 #    Если ноды уже в меше — берём ИХ HPK (иначе живой меш перестанет сходиться!).

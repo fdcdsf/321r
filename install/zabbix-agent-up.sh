@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Официальный agent2 (Ubuntu 22.04/24.04/26.04): активные проверки к HA b;c.
+# Официальный agent2 (Debian/Ubuntu): активные проверки к HA b;c.
+# Путь репозитория Zabbix = ${ID}${VERSION_ID} (debian13, ubuntu24.04) — проверено.
 set -euo pipefail
 source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 a1="$1"; a2="$2"
@@ -9,9 +10,11 @@ for a in $(node_names); do
   nssh "$a" 'set -e
     if ! command -v zabbix_agent2 >/dev/null 2>&1; then
       . /etc/os-release
-      case "$VERSION_ID" in 22.04|24.04|26.04) ;; *) echo "Ubuntu $VERSION_ID: нет проверенного Zabbix repo" >&2; exit 1;; esac
-      url="https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu${VERSION_ID}_all.deb"
-      curl -fsSL --max-time 30 "$url" -o /root/zabbix-release.deb
+      # Не привязываемся к Ubuntu: у Zabbix есть ветки debian/ и ubuntu/,
+      # имя пакета репозитория = ${ID}${VERSION_ID} (debian13, ubuntu24.04).
+      url="https://repo.zabbix.com/zabbix/7.0/${ID}/pool/main/z/zabbix-release/zabbix-release_latest_7.0+${ID}${VERSION_ID}_all.deb"
+      curl -fsSL --max-time 30 "$url" -o /root/zabbix-release.deb \
+        || { echo "$ID $VERSION_ID: нет пакета репозитория Zabbix ($url)" >&2; exit 1; }
       dpkg -i /root/zabbix-release.deb >/dev/null
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -qq && apt-get install -y -qq zabbix-agent2 jq >/dev/null
