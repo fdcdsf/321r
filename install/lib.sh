@@ -9,6 +9,15 @@ SECRETS="$HERE/secrets"
 # Урок 2026-11-23: установка может идти из-под systemd (авто-продолжение после
 # смены ядра), где HOME не задан. Без этого `set -u` падает на $HOME в инвентаре.
 export HOME="${HOME:-/root}"
+# Кто запустил установку: fail2ban обязан его не банить (урок 2026-11-23 — бан
+# админа убивал прогон). Запоминаем в файл, т.к. продолжение после ребута идёт
+# из-под systemd, где SSH_CLIENT уже нет.
+if [ -n "${SSH_CLIENT:-}" ]; then
+  mkdir -p /etc/db 2>/dev/null || true
+  printf '%s\n' "${SSH_CLIENT%% *}" > /etc/db/install-origin 2>/dev/null || true
+fi
+ADMIN_IP="${SSH_CLIENT:-}"; ADMIN_IP="${ADMIN_IP%% *}"
+[ -n "$ADMIN_IP" ] || ADMIN_IP="$(cat /etc/db/install-origin 2>/dev/null || true)"
 
 [ -f "$INV" ] || { echo "нет $INV: скопируйте install/inventory.conf.example или запустите ./install.sh (мастер)" >&2; exit 1; }
 # shellcheck source=/dev/null

@@ -6,6 +6,9 @@ set -euo pipefail
 umask 022
 
 ALIAS="${1:?имя ноды}"; MESH_IP="${2:?mesh-ip}"; VIP="${3:-10.66.0.99}"; PROFILE="${4:-L}"
+# Чей IP нельзя банить: инициатор установки + все ноды (ходят друг к другу по
+# публичным адресам). Запятая-список, передаётся пятым аргументом.
+IGNORE_IPS="${5:-}"
 
 echo "== $ALIAS: базовая подготовка ($MESH_IP, профиль $PROFILE) =="
 
@@ -149,14 +152,19 @@ ufw --force enable >/dev/null
 # конфиг кладём ДО установки, Debian-ский defaults-debian.conf убираем (он
 # перетирает ignoreip), после установки — перезапуск и снятие всех банов.
 install -d -m 755 /etc/fail2ban/jail.d
-CLIENT_IP="$(echo "${SSH_CLIENT:-}" | awk '{print $1}')"
+IGNORE_LIST="127.0.0.1/8 10.66.0.0/24"
+OLDIFS="$IFS"; IFS=','
+for ip in ${IGNORE_IPS:-}; do
+  [ -n "$ip" ] && IGNORE_LIST="$IGNORE_LIST $ip"
+done
+IFS="$OLDIFS"
 cat > /etc/fail2ban/jail.d/zz-321r.conf <<EOF
 [sshd]
 enabled = true
 port = 22,2222
 maxretry = 5
 bantime = 1h
-ignoreip = 127.0.0.1/8 10.66.0.0/24 ${CLIENT_IP}
+ignoreip = ${IGNORE_LIST}
 EOF
 apt_retry $APTQ install -y -qq fail2ban >/dev/null
 systemctl stop fail2ban >/dev/null 2>&1 || true

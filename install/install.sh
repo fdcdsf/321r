@@ -195,12 +195,18 @@ step_preflight() {
 step_base() {
   step "Базовая подготовка нод (все сервера одновременно)"
   local a pids=() pid bad=0
+  # fail2ban не должен банить ни того, кто ставит, ни сами ноды: они ходят друг
+  # к другу по ПУБЛИЧНЫМ адресам (nssh), а не только по мешу (урок 2026-11-23).
+  local IGNORE_IPS="$ADMIN_IP"
+  for a in $(node_names); do
+    IGNORE_IPS="$IGNORE_IPS,$(node_ip "$a")"
+  done
   for a in $(node_names); do
     (
       ncp "$a" -r "$ROOT/scripts/." "/usr/local/bin/"
       nssh "$a" 'chmod +x /usr/local/bin/*.sh'
       for u in "$ROOT"/systemd/*; do ncp "$a" "$u" "/etc/systemd/system/$(basename "$u")"; done
-      nssh "$a" "bash -s -- $a $(node_mesh "$a") $VIP $PROFILE" < "$HERE/prepare-node.sh"
+      nssh "$a" "bash -s -- $a $(node_mesh "$a") $VIP $PROFILE $IGNORE_IPS" < "$HERE/prepare-node.sh"
     ) 2>&1 | sed "s/^/[$a] /" &
     pids+=($!)
   done
