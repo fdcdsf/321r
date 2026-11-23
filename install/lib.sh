@@ -6,6 +6,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 INV="${INV:-$HERE/inventory.conf}"
 SECRETS="$HERE/secrets"
+# Урок 2026-11-23: установка может идти из-под systemd (авто-продолжение после
+# смены ядра), где HOME не задан. Без этого `set -u` падает на $HOME в инвентаре.
+export HOME="${HOME:-/root}"
 
 [ -f "$INV" ] || { echo "нет $INV: скопируйте install/inventory.conf.example или запустите ./install.sh (мастер)" >&2; exit 1; }
 # shellcheck source=/dev/null

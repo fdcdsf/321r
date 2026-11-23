@@ -132,7 +132,7 @@ wizard() {
     echo "PROFILE=\"$PROFILE\""
     echo "ZABBIX_MODE=\"$ZABBIX_MODE\""
     echo "BACKUP_WINDOWS=\"\""
-    echo "SSH_KEY=\"\$HOME/.ssh/id_ed25519\""
+    echo "SSH_KEY=\"\${HOME:-/root}/.ssh/id_ed25519\""
   } > "$CONF"
   chmod 600 "$CONF"
   echo "Инвентарь сохранён: $CONF"
@@ -228,7 +228,9 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'sleep 20; bash $HERE/install.sh --from=mesh >> /var/log/321r-install-resume.log 2>&1; systemctl disable 321r-resume.service >/dev/null 2>&1; rm -f /etc/systemd/system/321r-resume.service'
+Environment=HOME=/root
+# Самоудаляемся ТОЛЬКО при успехе: иначе сбой оставит установку брошенной.
+ExecStart=/bin/bash -c 'sleep 20; if bash $HERE/install.sh --from=mesh >> /var/log/321r-install-resume.log 2>&1; then systemctl disable 321r-resume.service >/dev/null 2>&1; rm -f /etc/systemd/system/321r-resume.service; else echo "ПРОДОЛЖЕНИЕ НЕ УДАЛОСЬ — повторить: bash $HERE/install.sh --from=mesh" >> /var/log/321r-install-resume.log; fi'
 [Install]
 WantedBy=multi-user.target
 EOF
