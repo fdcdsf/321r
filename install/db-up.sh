@@ -76,7 +76,15 @@ for row in "${APPS[@]}"; do
   fi
   echo "  $app: развёртываю (первичный: $primary)..."
   nssh "$CTRL" "/usr/local/bin/db-add.sh $app" | tail -5 | sed 's/^/  /'
-  ok "$app: развёрнут"
+  # Секрет приложения нужен НЕ только узлам placement: сервисы приложения
+  # (панель, бот) рендерят конфиг на ВСЕХ нодах, а их может быть сколько угодно
+  # (урок 2026-11-23: Pangolin падал с пустым паролем на ноде вне placement).
+  for a in $(node_names); do
+    [ "$a" = "$primary" ] && continue
+    nssh "$primary" "cat /etc/db/secrets/${app}.env 2>/dev/null" \
+      | nssh "$a" "umask 077; cat > /etc/db/secrets/${app}.env; chmod 600 /etc/db/secrets/${app}.env" || true
+  done
+  ok "$app: развёрнут (секрет разложен на все ноды)"
 done
 
 # 5) db-guard на всех нодах (тик 10 с, кворум, фенсинг, аварийный режим)

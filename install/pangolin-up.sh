@@ -26,17 +26,31 @@ else
   ok "valkey поднят ($(node_mesh "$VALKEY_NODE"):6379)"
 fi
 
-step "Секреты Pangolin (server.secret — один на кластер)"
+step "Секреты Pangolin (server.secret и APP_PASSWORD — одинаковые на всех нодах)"
 SS_FILE="$SECRETS/pangolin-server-secret"
 [ -f "$SS_FILE" ] || openssl rand -hex 24 > "$SS_FILE"
 SS="$(cat "$SS_FILE")"
+# APP_PASSWORD db-add создаёт ТОЛЬКО на первичной ноде, а Pangolin рендерит
+# config.yml на ВСЕХ нодах (урок 2026-11-23: на нодах вне placement пароля не
+# было -> connection_string оставался пустым, Pangolin падал с
+# «SASL: client password must be a string»). Собираем пароль с любой ноды,
+# где он есть, и раздаём всем.
+APP_PASS=""
 for a in $(node_names); do
-  nssh "$a" "grep -q PANGOLIN_SERVER_SECRET /etc/db/secrets/pangolin.env 2>/dev/null \
+  APP_PASS="$(nssh "$a" "grep '^APP_PASSWORD=' /etc/db/secrets/pangolin.env 2>/dev/null | cut -d= -f2- | tr -d '\"'" || true)"
+  [ -n "$APP_PASS" ] && break
+done
+[ -n "$APP_PASS" ] || fail "нет APP_PASSWORD ни на одной ноде — сначала шаг db (db-add pangolin)"
+for a in $(node_names); do
+  nssh "$a" "umask 077
+    grep -q PANGOLIN_SERVER_SECRET /etc/db/secrets/pangolin.env 2>/dev/null \
       || echo 'PANGOLIN_SERVER_SECRET=$SS' >> /etc/db/secrets/pangolin.env
+    grep -q '^APP_PASSWORD=' /etc/db/secrets/pangolin.env 2>/dev/null \
+      || echo 'APP_PASSWORD=$APP_PASS' >> /etc/db/secrets/pangolin.env
     chmod 600 /etc/db/secrets/pangolin.env
-    grep -q APP_PASSWORD /etc/db/secrets/pangolin.env 2>/dev/null \
-      || echo 'нет APP_PASSWORD — сначала шаг db (db-add pangolin)' >&2"
-  ok "$a: pangolin.env готов"
+    grep -q '^APP_PASSWORD=..*' /etc/db/secrets/pangolin.env \
+      || { echo 'APP_PASSWORD пустой — конфиг Pangolin будет сломан' >&2; exit 1; }"
+  ok "$a: pangolin.env готов (server.secret + APP_PASSWORD)"
 done
 
 step "Сертификат дашборда (certbot DNS-01 → файл для traefik)"

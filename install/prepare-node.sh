@@ -145,12 +145,9 @@ ufw default allow outgoing >/dev/null
 ufw --force enable >/dev/null
 
 # --- 7) fail2ban ---
-# ВАЖНО (урок 2026-11-23): сам `apt install fail2ban` поднимает ДЕФОЛТНЫЙ jail sshd
-# и успевает ЗАБАНИТЬ админа, который ведёт установку — сессия падает с
-# «Connection closed by remote host», apt остаётся с полуненастроенным dpkg,
-# а повторный запуск глохнет с молчаливым «Could not get lock». Поэтому:
-# конфиг кладём ДО установки, Debian-ский defaults-debian.conf убираем (он
-# перетирает ignoreip), после установки — перезапуск и снятие всех банов.
+# НЕ банить во время установки (урок 2026-11-23: fail2ban убивал сессию админа
+# посреди шага, apt оставался полусобранным, повтор глох). Jail sshd выключен
+# до шага harden — защиту включаем, когда всё уже стоит.
 install -d -m 755 /etc/fail2ban/jail.d
 IGNORE_LIST="127.0.0.1/8 10.66.0.0/24"
 OLDIFS="$IFS"; IFS=','
@@ -160,7 +157,7 @@ done
 IFS="$OLDIFS"
 cat > /etc/fail2ban/jail.d/zz-321r.conf <<EOF
 [sshd]
-enabled = true
+enabled = false
 port = 22,2222
 maxretry = 5
 bantime = 1h

@@ -43,11 +43,23 @@ wizard() {
     i=$((i+1))
   done
   read -rp "Нода команд бота (control) [${nodes[1]%% *}]: " x; CONTROL="${x:-${nodes[1]%% *}}"
+  # Раскладка БД вычисляется из РЕАЛЬНЫХ имён и ЧИСЛА серверов, а не зашита на
+  # a,b,c: у пользователя может быть сколько угодно нод с любыми именами
+  # (урок 2026-11-23). Реплики БД — 3 (правило 3-2-1), arbiter mongo — отдельный узел.
+  local nm=()
+  local i n d3="" d2="" arb=""
+  for row in "${nodes[@]}"; do nm+=("${row%% *}"); done
+  n="${#nm[@]}"
+  for ((i=0; i<n && i<3; i++)); do d3+="${d3:+,}${nm[i]}"; done
+  for ((i=1; i<n && i<3; i++)); do d2+="${d2:+,}${nm[i]}"; done
+  arb="${nm[0]}"
+  [ -n "$d2" ] || d2="${nm[0]}"
   echo "Приложения (базы данных): по умолчанию pangolin(pg), remnawave(pg), komodo(mongo)."
   read -rp "Оставить как есть? [Y/n]: " x
   local apps=()
   if [ "${x:-y}" = "y" ] || [ "${x:-Y}" = "Y" ]; then
-    apps=("pangolin pg 5432 a,b,c" "remnawave pg 5433 a,b,c" "komodo mongo 27017 b,c arbiter=a")
+    apps=("pangolin pg 5432 $d3" "remnawave pg 5433 $d3" "komodo mongo 27017 $d2 arbiter=$arb")
+    echo "  раскладка на $n серверов: pg=$d3, mongo=$d2 (арбитр $arb)"
   else
     echo "Вводите по одному: имя engine(pg|mongo) порт placement (напр. myapp pg 5434 a,b,c). Пустая строка = конец."
     while read -rp "> " line; do [ -z "$line" ] && break; apps+=("$line"); done
@@ -102,7 +114,7 @@ wizard() {
     y|Y) ZABBIX_MODE=install
          found=0
          for row in "${apps[@]}"; do [ "${row%% *}" != zabbix ] || found=1; done
-         [ "$found" = 1 ] || apps+=("zabbix pg 5434 a,b,c") ;;
+         [ "$found" = 1 ] || apps+=("zabbix pg 5434 $d3") ;;
     n|N) ZABBIX_MODE=off ;;
     *) echo 'Ответьте y или n'; exit 1 ;;
   esac
@@ -365,6 +377,14 @@ step_harden()   { step "Финальная защита ssh"
     warn "ваш публичный ключ не задан — парольный вход ОСТАЁТСЯ (безопасность ниже)."
     warn "Ваш ключ можно добавить позже в inventory (USER_SSH_KEY) и повторить: --from=harden"
   fi
+  # Защиту от брутфорса включаем только ЗДЕСЬ: во время установки jail sshd
+  # выключен (урок 2026-11-23 — fail2ban убивал сессию админа посреди шага).
+  for a in $(node_names); do
+    nssh "$a" "sed -i 's/^enabled = false/enabled = true/' /etc/fail2ban/jail.d/zz-321r.conf 2>/dev/null
+      systemctl restart fail2ban >/dev/null 2>&1
+      fail2ban-client status sshd >/dev/null 2>&1" || true
+    ok "$a: защита sshd (fail2ban) включена"
+  done
 }
 
 if [ -n "$MANIFEST_ONLY" ]; then
