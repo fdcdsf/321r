@@ -144,11 +144,13 @@ ufw --force enable >/dev/null
 # --- 7) fail2ban ---
 # ВАЖНО (урок 2026-11-23): сам `apt install fail2ban` поднимает ДЕФОЛТНЫЙ jail sshd
 # и успевает ЗАБАНИТЬ админа, который ведёт установку — сессия падает с
-# «Connection closed by remote host», а в fail2ban: Banned IP list: <админ>.
-# Поэтому конфиг с ignoreip кладём ДО установки, и лишь потом ставим и включаем.
+# «Connection closed by remote host», apt остаётся с полуненастроенным dpkg,
+# а повторный запуск глохнет с молчаливым «Could not get lock». Поэтому:
+# конфиг кладём ДО установки, Debian-ский defaults-debian.conf убираем (он
+# перетирает ignoreip), после установки — перезапуск и снятие всех банов.
 install -d -m 755 /etc/fail2ban/jail.d
 CLIENT_IP="$(echo "${SSH_CLIENT:-}" | awk '{print $1}')"
-cat > /etc/fail2ban/jail.d/321r.conf <<EOF
+cat > /etc/fail2ban/jail.d/zz-321r.conf <<EOF
 [sshd]
 enabled = true
 port = 22,2222
@@ -157,7 +159,10 @@ bantime = 1h
 ignoreip = 127.0.0.1/8 10.66.0.0/24 ${CLIENT_IP}
 EOF
 apt_retry $APTQ install -y -qq fail2ban >/dev/null
+systemctl stop fail2ban >/dev/null 2>&1 || true
+rm -f /etc/fail2ban/jail.d/defaults-debian.conf
 systemctl enable --now fail2ban >/dev/null
+fail2ban-client unban --all >/dev/null 2>&1 || true
 
 # --- 8) каталоги кластера (урок: umask 077 на секреты) ---
 install -d -m 700 /etc/db/secrets /etc/db/apps.d

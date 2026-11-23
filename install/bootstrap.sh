@@ -14,10 +14,16 @@ TARGET="/opt/321r"
 
 export DEBIAN_FRONTEND=noninteractive
 echo "321r · подготовка установщика..."
-apt-get update -qq >/dev/null 2>&1 || true
-apt-get install -y -qq curl tar >/dev/null 2>&1
+# Урок 2026-11-23: apt у свежей Debian/Ubuntu бывает занят (unattended-upgrades)
+# либо оставляет НЕЗАВЕРШЁННУЮ настройку после прерванной установки. Тогда
+# «apt-get install» молча падает с «Could not get lock» (код 100) и установка
+# обрывается без единого объяснения. Ждём, чиним и РЕТРАИМ, ошибки не прячем.
+for i in $(seq 1 60); do pgrep -x unattended-upgr >/dev/null 2>&1 || break; sleep 10; done
+dpkg --configure -a 2>&1 | tail -5 || true
+apt_retry() { local n; for n in $(seq 1 12); do "$@" && return 0; echo "  apt занят/недоступен — жду 15 с (попытка $n)"; sleep 15; done; return 1; }
+apt_retry apt-get update -qq
 # sshpass — разовый вход по паролям на другие серверы (чтобы заложить ключ)
-apt-get install -y -qq sshpass >/dev/null 2>&1 || true
+apt_retry apt-get install -y -qq curl tar sshpass
 
 echo "321r · скачиваю установщик..."
 rm -rf "$TARGET" /tmp/321r-master

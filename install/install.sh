@@ -215,10 +215,30 @@ step_base() {
   done
   if [ "${#ra[@]}" -gt 0 ]; then
     step "Перезагрузка нод со сменой ядра (${ra[*]})"
+    # Мастер-нода — тоже нода: её ребут убил бы установку посреди шага.
+    # Поэтому для МАСТЕРА ставим авто-продолжение (инвентарь уже записан мастером),
+    # а остальные просто перезагружаем и ждём.
+    local master_me; master_me="$(hostname | cut -d. -f1)"
     for a in "${ra[@]}"; do
+      if [ "$a" = "$master_me" ]; then
+        cat > /etc/systemd/system/321r-resume.service <<EOF
+[Unit]
+Description=321r: продолжение установки после смены ядра
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'sleep 20; bash $HERE/install.sh --from=mesh >> /var/log/321r-install-resume.log 2>&1; systemctl disable 321r-resume.service >/dev/null 2>&1; rm -f /etc/systemd/system/321r-resume.service'
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload && systemctl enable 321r-resume.service >/dev/null 2>&1
+        ok "$a (мастер): после ребута установка продолжится сама (--from=mesh)"
+      fi
       nssh "$a" 'rm -f /etc/321r-reboot-required; nohup sh -c "sleep 1; systemctl reboot" >/dev/null 2>&1 &' || true
     done
     for a in "${ra[@]}"; do
+      [ "$a" = "$master_me" ] && continue   # мастер продолжит сам, сессия с ним умерла
       local up=""
       for i in $(seq 1 60); do
         if nssh "$a" 'uname -r' >/dev/null 2>&1; then up=1; break; fi
@@ -227,6 +247,14 @@ step_base() {
       [ -n "$up" ] || fail "$a: не вернулась после перезагрузки"
       ok "$a: снова в строю, ядро $(nssh "$a" 'uname -r')"
     done
+    local me_in_ra=""
+    for a in "${ra[@]}"; do [ "$a" = "$master_me" ] && me_in_ra=1; done
+    if [ -n "$me_in_ra" ]; then
+      echo
+      echo "  ВНИМАНИЕ: мастер-нода ($master_me) перезагружается для смены ядра."
+      echo "  Установка продолжится автоматически, лог: /var/log/321r-install-resume.log"
+      exit 0
+    fi
   fi
   detect_all_ports   # теперь все ноды отвечают на 2222
   render_manifest
