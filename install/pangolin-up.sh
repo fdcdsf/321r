@@ -60,10 +60,20 @@ for a in $(node_names); do
     nssh "$a" "chmod 755 /usr/local/bin/panel-cert-reload.sh
       mkdir -p /etc/letsencrypt/renewal-hooks/deploy
       cp /usr/local/bin/panel-cert-reload.sh /etc/letsencrypt/renewal-hooks/deploy/
-      certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
-        -d pangolin.$DOMAIN --non-interactive --agree-tos -m $EMAIL 2>&1 | tail -3
-      d=\"/etc/letsencrypt/live/pangolin.$DOMAIN\"
-      [ -f \"\$d/fullchain.pem\" ] && [ -f \"\$d/privkey.pem\" ] || { echo 'СЕРТ ДАШБОРДА НЕ ВЫДАН' >&2; exit 1; }
+      # DNS-01 надо ЖДАТЬ: когда несколько нод почти одновременно запрашивают
+      # сертификаты по одной зоне, 10 с по умолчанию не хватает и часть падает с
+      # «CA failed to verify the DNS TXT records» (урок 2026-11-23). Плюс повтор.
+      ok=''
+      for try in 1 2 3; do
+        certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+          --dns-cloudflare-propagation-seconds 60 \
+          -d pangolin.$DOMAIN --non-interactive --agree-tos -m $EMAIL 2>&1 | tail -3
+        d=\"/etc/letsencrypt/live/pangolin.$DOMAIN\"
+        if [ -f \"\$d/fullchain.pem\" ] && [ -f \"\$d/privkey.pem\" ]; then ok=1; break; fi
+        echo \"  попытка \$try: сертификат не выдан, жду 30 с\"
+        sleep 30
+      done
+      [ -n \"\$ok\" ] || { echo 'СЕРТ ДАШБОРДА НЕ ВЫДАН' >&2; exit 1; }
       echo 'сертификат дашборда выдан/актуален'"
   ) 2>&1 | sed "s/^/[$a] /" &
   pids+=($!)

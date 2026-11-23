@@ -35,7 +35,10 @@ for a in $(node_names); do
       if [ -s \"\$d/fullchain.pem\" ]; then
         certbot renew --cert-name 'vpn-$a.$DOMAIN' --non-interactive >/dev/null
       else
+        # DNS-01 надо ждать: 10 с по умолчанию мало при одновременных запросах
+        # нескольких нод по одной зоне (урок 2026-11-23).
         certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+          --dns-cloudflare-propagation-seconds 60 \
           --cert-name vpn-$a.$DOMAIN -d vpn-$a.$DOMAIN -d tg.$DOMAIN \
           --non-interactive --agree-tos -m admin@$DOMAIN >/dev/null
       fi

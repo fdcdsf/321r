@@ -23,8 +23,16 @@ for name in "$@"; do
       nssh "$a" "set -e
         test -f /root/.secrets/cloudflare.ini
         test -d /opt/pangolin/config/dynamic
-        certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
-          -d '$host' --non-interactive --agree-tos -m 'admin@$DOMAIN' > /dev/null 2>&1
+        ok=''
+        for try in 1 2 3; do
+          certbot certonly --dns-cloudflare --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \
+            --dns-cloudflare-propagation-seconds 60 \
+            -d '$host' --non-interactive --agree-tos -m 'admin@$DOMAIN' > /dev/null 2>&1
+          if test -s '/etc/letsencrypt/live/$host/fullchain.pem'; then ok=1; break; fi
+          echo \"  попытка \$try: сертификат не выдан, жду 30 с\"
+          sleep 30
+        done
+        test -n \"\$ok\"
         test -s '/etc/letsencrypt/live/$host/fullchain.pem'
         test -s '/etc/letsencrypt/live/$host/privkey.pem'
         f='/opt/pangolin/config/dynamic/321r-resource-$name.yml'
