@@ -6,6 +6,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
 INV="${INV:-$HERE/inventory.conf}"
 SECRETS="$HERE/secrets"
+# Шаги не должны зависеть от того, был ли шаг preflight: установку возобновляют
+# с любого места (--from=base|mesh|...), а каталог секретов и ключ кластера
+# создавались только в preflight (урок 2026-11-23: --from=base падал на
+# «secrets/hpk: No such file or directory»).
+install -d -m 700 "$SECRETS" 2>/dev/null || mkdir -p "$SECRETS" 2>/dev/null || true
 # Урок 2026-11-23: установка может идти из-под systemd (авто-продолжение после
 # смены ядра), где HOME не задан. Без этого `set -u` падает на $HOME в инвентаре.
 export HOME="${HOME:-/root}"
