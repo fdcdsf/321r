@@ -63,6 +63,18 @@ for row in "${APPS[@]}"; do
   app="$(app_name "$row")"; engine="$(app_engine "$row")"
   primary="$(app_placement "$row" | awk '{print $1}')"
   dir="pg-$app"; [ "$engine" = "mongo" ] && dir="mongo-$app"
+  # Секрет приложения нужен НЕ только узлам placement: сервисы (панель, бот)
+  # рендерят конфиг на ВСЕХ нодах, а их может быть сколько угодно (урок
+  # 2026-11-23: Pangolin падал с пустым паролем на ноде вне placement).
+  # Раздаём БЕЗОГОВОРОЧНО — в том числе когда БД уже развёрнута.
+  for a in $(node_names); do
+    [ "$a" = "$primary" ] && continue
+    # Не затирать существующий секрет пустотой: берём только если на источнике он есть.
+    secret="$(nssh "$primary" "cat /etc/db/secrets/${app}.env 2>/dev/null" || true)"
+    [ -n "$secret" ] || continue
+    printf '%s\n' "$secret" \
+      | nssh "$a" "umask 077; cat > /etc/db/secrets/${app}.env; chmod 600 /etc/db/secrets/${app}.env" || true
+  done
   # «развёрнуто» = контейнеры запущены на ВСЕХ узлах placement. Каталоги данных
   # НЕ годятся как признак (урок: db-add создаёт их заранее везде → недоделка
   # считалась готовой). Частично развёрнутое доделывается повторным db-add.
@@ -71,19 +83,11 @@ for row in "${APPS[@]}"; do
     if ! nssh "$a" "docker ps --format '{{.Names}}' | grep -qx $dir"; then deployed=0; break; fi
   done
   if [ "$deployed" = 1 ]; then
-    ok "$app: уже развёрнут — пропускаю"
+    ok "$app: уже развёрнут (секрет разложен на все ноды) — пропускаю"
     continue
   fi
   echo "  $app: развёртываю (первичный: $primary)..."
   nssh "$CTRL" "/usr/local/bin/db-add.sh $app" | tail -5 | sed 's/^/  /'
-  # Секрет приложения нужен НЕ только узлам placement: сервисы приложения
-  # (панель, бот) рендерят конфиг на ВСЕХ нодах, а их может быть сколько угодно
-  # (урок 2026-11-23: Pangolin падал с пустым паролем на ноде вне placement).
-  for a in $(node_names); do
-    [ "$a" = "$primary" ] && continue
-    nssh "$primary" "cat /etc/db/secrets/${app}.env 2>/dev/null" \
-      | nssh "$a" "umask 077; cat > /etc/db/secrets/${app}.env; chmod 600 /etc/db/secrets/${app}.env" || true
-  done
   ok "$app: развёрнут (секрет разложен на все ноды)"
 done
 
