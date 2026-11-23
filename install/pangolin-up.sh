@@ -155,19 +155,33 @@ st="$(nssh "$FIRST" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/de
 wait_pangolin "$FIRST"
 
 step "Pangolin на остальных нодах (схема БД уже готова)"
+# Ноды готовим ПАРАЛЛЕЛЬНО: у каждой своя докачка образа, а их может быть
+# сколько угодно — последовательный цикл превращает установку в ползание
+# (урок 2026-11-23: 5 серверов, образы тянулись по очереди).
+pids=(); bad=0
 for a in $(node_names); do
   [ "$a" = "$FIRST" ] && continue
-  nssh "$a" 'cd /opt/pangolin && docker compose up -d pangolin' >/dev/null
-  st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
-  [ "$st" != unhealthy ] || nssh "$a" 'docker restart pangolin >/dev/null'
-  wait_pangolin "$a"
+  (
+    nssh "$a" 'cd /opt/pangolin && docker compose up -d pangolin' >/dev/null
+    st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+    [ "$st" != unhealthy ] || nssh "$a" 'docker restart pangolin >/dev/null'
+    wait_pangolin "$a"
+    echo "панель готова"
+  ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "панель Pangolin не стала healthy на всех нодах"
 
 step "Gerbil и Traefik (после готовности всех панелей)"
+pids=(); bad=0
 for a in $(node_names); do
-  nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null
-  ok "$a: стек запущен"
+  ( nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null && echo "стек запущен" ) \
+    2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "gerbil/traefik не запустились на всех нодах"
 
 step "Восстановление TCP-масок после переустановки Pangolin"
 # Урок 40: маски лежат в dynamic/ Pangolin. После чистого переустановления каталог
@@ -186,28 +200,37 @@ if [ -f "$ROOT/deploy/harvest/mask_config.yml" ]; then
 fi
 
 step "Лечение багов Pangolin (wildcard-repair) + cron"
+pids=()
 for a in $(node_names); do
-  nssh "$a" "/usr/local/bin/pangolin-wildcard-repair.sh $(node_ip "$a") >/dev/null 2>&1 || true
+  ( nssh "$a" "/usr/local/bin/pangolin-wildcard-repair.sh $(node_ip "$a") >/dev/null 2>&1 || true
     cat > /etc/cron.d/321r-pangolin <<EOF
 */30 * * * * root /usr/local/bin/pangolin-wildcard-repair.sh $(node_ip "$a") >> /var/log/wildcard-repair.log 2>&1
 EOF
-    chmod 644 /etc/cron.d/321r-pangolin"
-  ok "$a: repair после старта + каждые 30 мин"
+    chmod 644 /etc/cron.d/321r-pangolin" && echo "repair после старта + каждые 30 мин" ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || true; done
 
 step "Второй проход: gerbil/traefik после оздоровления панели"
 # Урок: compose с depends_on: service_healthy НЕ ретраит: если healthcheck на момент
 # первого up ещё не прошёл — gerbil/traefik не стартуют никогда. Сначала ждём панель.
+# Ждём ВСЕ ноды одновременно: по очереди это до 3 минут на каждую.
+pids=(); bad=0
 for a in $(node_names); do
-  st=""
-  for i in $(seq 1 36); do
-    st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
-    [ "$st" = "healthy" ] && break
-    sleep 5
-  done
-  nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null 2>&1
-  ok "$a: панель $st — стек пересобран"
+  (
+    st=""
+    for i in $(seq 1 36); do
+      st="$(nssh "$a" 'docker inspect -f "{{.State.Health.Status}}" pangolin 2>/dev/null' || true)"
+      [ "$st" = "healthy" ] && break
+      sleep 5
+    done
+    nssh "$a" 'cd /opt/pangolin && docker compose up -d' >/dev/null 2>&1
+    echo "панель $st — стек пересобран"
+  ) 2>&1 | sed "s/^/[$a] /" &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid" || bad=1; done
+[ "$bad" = 0 ] || fail "второй проход gerbil/traefik прошёл не на всех нодах"
 
 step "Проверка"
 sleep 10
