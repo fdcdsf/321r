@@ -6,30 +6,39 @@ source "$(cd "$(dirname "$0")" && pwd)/lib.sh"
 [ "${ZABBIX_MODE:-off}" = install ] || { ok "Zabbix выключен (ZABBIX_MODE=off)"; exit 0; }
 [ -n "${DOMAIN:-}" ] || fail "Zabbix UI через Pangolin требует DOMAIN"
 CONTROL_NODE="$CONTROL"
+# Раскладку БД zabbix берём из ИНВЕНТАРЯ (APPS), а не «все ноды»: db-add создаёт
+# БД строго по placement, а серверов у пользователя может быть сколько угодно
+# (урок 2026-11-23: на 5 нодах шаг падал на «PG zabbix не поднят» для d и e).
+ZABBIX_ROW=""
+for row in "${APPS[@]}"; do [ "$(app_name "$row")" = zabbix ] && ZABBIX_ROW="$row"; done
+[ -n "$ZABBIX_ROW" ] || fail "в инвентаре нет приложения zabbix — добавьте строку в APPS"
+ZABBIX_PLACEMENT="$(app_placement "$ZABBIX_ROW")"
+ZABBIX_PRIMARY="$(echo "$ZABBIX_PLACEMENT" | awk '{print $1}')"
+# HA-пара серверов Zabbix — из тех же узлов, что и БД.
 STANDBY=""
-for a in $(node_names); do [ "$a" = "$CONTROL_NODE" ] || STANDBY="$a"; done
-[ -n "$STANDBY" ] || fail "HA требует две разные ноды Zabbix"
+for a in $ZABBIX_PLACEMENT; do [ "$a" = "$CONTROL_NODE" ] || { STANDBY="$a"; break; }; done
+[ -n "$STANDBY" ] || fail "HA требует две разные ноды Zabbix (placement: $ZABBIX_PLACEMENT)"
 
 step "Бюджет памяти и отдельная БД Zabbix (первичный + реплики 321r)"
 for a in "$CONTROL_NODE" "$STANDBY"; do
   mem="$(nssh "$a" 'free -m | awk "/Mem:/{print \$2}"')"
   [ "${mem:-0}" -ge 3800 ] || fail "$a: ${mem:-0} МБ RAM — сервер+web Zabbix HA требуют >=4 ГБ"
 done
-for a in $(node_names); do
+for a in $ZABBIX_PLACEMENT; do
   if ! nssh "$a" '[ -f /etc/db/apps.d/zabbix.yaml ]'; then
     { echo 'name: zabbix'; echo 'engine: pg'; echo 'class: cluster'
-      printf 'placement: [%s]\n' "$(node_names | paste -sd ',')"
-      printf 'primary: %s\n' "$(node_names | head -1)"
+      printf 'placement: [%s]\n' "$(echo "$ZABBIX_PLACEMENT" | tr ' ' ',')"
+      printf 'primary: %s\n' "$ZABBIX_PRIMARY"
       echo 'port: 5434'
     } | nssh "$a" 'cat > /etc/db/apps.d/zabbix.yaml'
   fi
 done
-if ! nssh "$CONTROL_NODE" 'docker ps --format "{{.Names}}" | grep -qx pg-zabbix'; then
+if ! nssh "$ZABBIX_PRIMARY" 'docker ps --format "{{.Names}}" | grep -qx pg-zabbix'; then
   nssh "$CONTROL_NODE" '/usr/local/bin/db-add.sh zabbix' | tail -8
 fi
-for a in $(node_names); do
+for a in $ZABBIX_PLACEMENT; do
   nssh "$a" 'docker ps --format "{{.Names}}" | grep -qx pg-zabbix' \
-    || fail "$a: PG zabbix не поднят"
+    || fail "$a: PG zabbix не поднят (placement: $ZABBIX_PLACEMENT)"
 done
 
 step "Zabbix HA (server на $CONTROL_NODE/$STANDBY, web на всех нодах)"
