@@ -22,3 +22,7 @@ Thumbs.db
 # Дампы диалогов LLM (только локально; в текстах переписки бывают секреты)
 llm_memoru/*.json
 llm_memoru/*.txt
+
+# Alpha/ — отдельный репозиторий продукта (github.com/fdcdsf/321r-Alpha),
+# сюда не коммитится: у него свой git
+Alpha/
