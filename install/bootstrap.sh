@@ -26,9 +26,20 @@ apt_retry apt-get update -qq
 apt_retry apt-get install -y -qq curl tar sshpass
 
 echo "321r · скачиваю установщик..."
+# Секреты и инвентарь переживают повторную установку (урок 2026-11-23: rm -rf
+# /opt/321r сносил install/secrets/ — ключ кластера, server.secret, лицензию.
+# После этого межнодовый ssh отвергался: ключ пересоздавался, а
+# authorized_keys не обновлялся).
+KEEP=/tmp/321r-keep
+rm -rf "$KEEP"; mkdir -p "$KEEP"
+[ -d "$TARGET/install/secrets" ] && cp -a "$TARGET/install/secrets" "$KEEP/secrets"
+[ -f "$TARGET/install/inventory.conf" ] && cp -a "$TARGET/install/inventory.conf" "$KEEP/inventory.conf"
 rm -rf "$TARGET" /tmp/321r-master
 curl -fsSL "$REPO_TARBALL" | tar xz -C /tmp
 mv /tmp/321r-master "$TARGET"
+[ -d "$KEEP/secrets" ] && cp -a "$KEEP/secrets" "$TARGET/install/secrets"
+[ -f "$KEEP/inventory.conf" ] && cp -a "$KEEP/inventory.conf" "$TARGET/install/inventory.conf"
+rm -rf "$KEEP"
 cd "$TARGET"
 chmod +x install/*.sh   # тарбол GitHub может прийти без битов выполнения
 

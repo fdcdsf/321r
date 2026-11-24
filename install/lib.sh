@@ -138,7 +138,11 @@ ensure_access() {
   for a in $(node_names); do
     if [ "$a" = "$me" ]; then
       mkdir -p /root/.ssh; chmod 700 /root/.ssh
-      grep -qF '321r-cluster' /root/.ssh/authorized_keys 2>/dev/null || cat "$SECRETS/id_cluster.pub" >> /root/.ssh/authorized_keys
+      # Проверяем ИМЕННО текущий ключ, а не комментарий «321r-cluster»: при смене
+      # ключа комментарий находился, а новый ключ не попадал в authorized_keys
+      # и межнодовый ssh отвергался (урок 2026-11-23).
+      grep -qxF "$(cat "$SECRETS/id_cluster.pub")" /root/.ssh/authorized_keys 2>/dev/null \
+        || cat "$SECRETS/id_cluster.pub" >> /root/.ssh/authorized_keys
       chmod 600 /root/.ssh/authorized_keys
       detect_port "$a"
       ok "$a (этот сервер): ключ кластера заложен локально"
@@ -168,7 +172,7 @@ setup_cluster_key() {
     ncp "$a" "$SECRETS/id_cluster.pub" "/root/.ssh/id_cluster.pub"
     nssh "$a" 'chmod 600 /root/.ssh/id_cluster
       mkdir -p /root/.ssh && chmod 700 /root/.ssh
-      grep -q "321r-cluster" /root/.ssh/authorized_keys 2>/dev/null || cat /root/.ssh/id_cluster.pub >> /root/.ssh/authorized_keys
+      grep -qxF "$(cat /root/.ssh/id_cluster.pub)" /root/.ssh/authorized_keys 2>/dev/null || cat /root/.ssh/id_cluster.pub >> /root/.ssh/authorized_keys
       chmod 600 /root/.ssh/authorized_keys
       cat > /root/.ssh/config <<EOF
 Host 10.66.0.*
