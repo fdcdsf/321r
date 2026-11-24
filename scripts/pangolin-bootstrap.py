@@ -14,6 +14,7 @@ import re
 import secrets
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -39,14 +40,25 @@ class PangolinApi:
             method=method,
             headers={"Content-Type": "application/json", "X-CSRF-Token": "x-csrf-protection"},
         )
-        try:
-            with self.opener.open(req, timeout=25) as res:
-                reply = json.load(res)
-        except urllib.error.HTTPError as exc:
-            # Ответ сервера не показываем: некоторые ошибки отражают данные запроса.
-            raise ApiError(f"Pangolin API {path}: HTTP {exc.code}") from None
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise ApiError(f"Pangolin API {path} недоступен ({type(exc).__name__})") from None
+        # Pangolin API за traefik иногда роняет соединение (наблюдалось на стенде:
+        # живой API отвечал 200, но раз в несколько запросов — сброс через ~5 с).
+        # Сетевые сбои повторяем, ошибки сервера — нет, они детерминированы.
+        reply = None
+        last = None
+        for attempt in range(4):
+            try:
+                with self.opener.open(req, timeout=25) as res:
+                    reply = json.load(res)
+                break
+            except urllib.error.HTTPError as exc:
+                # Ответ сервера не показываем: некоторые ошибки отражают данные запроса.
+                raise ApiError(f"Pangolin API {path}: HTTP {exc.code}") from None
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last = exc
+                if attempt < 3:
+                    time.sleep(3 * (attempt + 1))
+        if reply is None:
+            raise ApiError(f"Pangolin API {path} недоступен ({type(last).__name__})") from None
         if reply.get("error") or reply.get("success") is False:
             raise ApiError(f"Pangolin API {path}: операция отклонена")
         return reply.get("data")
