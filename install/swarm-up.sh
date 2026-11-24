@@ -27,12 +27,28 @@ for a in $(node_names); do
 done
 
 # 3) все — менеджеры (воркеры не берём: db-guard на воркере не работает)
-nssh "$FIRST" 'for id in $(docker node ls -q); do docker node update --availability active $id >/dev/null; done'
+# Метки проставляем ОДНОЙ командой и с повтором: Swarm оптимистично блокирует
+# обновления узлов и отвечает «update out of sequence», если они идут слишком
+# быстро друг за другом (урок 2026-11-23: шаг swarm падал на пятой ноде из пяти).
+node_update() { # $1 = аргументы docker node update
+  local n out=""
+  for n in $(seq 1 10); do
+    out="$(nssh "$FIRST" "docker node update $1 2>&1")" && return 0
+    case "$out" in
+      *"out of sequence"*) sleep 3; continue ;;
+      *) break ;;
+    esac
+  done
+  echo "docker node update ($1) не прошёл: $out" >&2
+  return 1
+}
+
+node_update "--availability active $(nssh "$FIRST" 'docker node ls -q' | tr '\n' ' ')" >/dev/null
 for a in $(node_names); do
   id="$(nssh "$a" 'docker info --format "{{.Swarm.NodeID}}"')"
   role="$(node_role "$a")"; role="${role:-work}"
-  # метки ролей: state|work|bulk — по инвентарю
-  nssh "$FIRST" "docker node update --label-add role=$role $id >/dev/null && docker node update --label-add name=$a $id >/dev/null"
+  # метки ролей: state|work|bulk — по инвентарю; обе метки за один вызов
+  node_update "--label-add role=$role --label-add name=$a $id" >/dev/null
   ok "$a: метки role=$role, name=$a"
 done
 
