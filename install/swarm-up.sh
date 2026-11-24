@@ -43,7 +43,9 @@ node_update() { # $1 = аргументы docker node update
   return 1
 }
 
-node_update "--availability active $(nssh "$FIRST" 'docker node ls -q' | tr '\n' ' ')" >/dev/null
+for id in $(nssh "$FIRST" 'docker node ls -q'); do
+  node_update "--availability active $id" >/dev/null
+done
 for a in $(node_names); do
   id="$(nssh "$a" 'docker info --format "{{.Swarm.NodeID}}"')"
   role="$(node_role "$a")"; role="${role:-work}"
